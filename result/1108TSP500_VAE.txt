@@ -1,0 +1,61 @@
+D:\Anaconda3\envs\COMP9993\python.exe D:\COMP9991\GraphVae_improve\VAE_TSP\TSP_GT_VAE.py 
+D:\Anaconda3\envs\COMP9993\Lib\site-packages\requests\__init__.py:86: RequestsDependencyWarning: Unable to find acceptable character detection dependency (chardet or charset_normalizer).
+  warnings.warn(
+Using device: cuda
+Loaded 500 TSP instances from tsp500_train_lkh_100.txt
+D:\COMP9991\GraphVae_improve\VAE_TSP\TSP_GT_VAE.py:447: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  scaler = torch.cuda.amp.GradScaler(enabled=torch.cuda.is_available())
+Epoch 1/20: 100%|██████████| 125/125 [00:07<00:00, 17.76it/s, f1=0, kl=0.00163, loss=0.552]
+[Epoch 001] beta=0.017 | loss=0.5638 | P=0.0000 R=0.0031 F1=0.0001 Acc=0.9929
+Epoch 2/20: 100%|██████████| 125/125 [00:06<00:00, 19.49it/s, f1=0.149, kl=0.000706, loss=0.114]
+[Epoch 002] beta=0.033 | loss=0.2714 | P=0.0471 R=0.6745 F1=0.0828 Acc=0.9474
+Epoch 3/20: 100%|██████████| 125/125 [00:06<00:00, 19.69it/s, f1=0.228, kl=0.000465, loss=0.0773]
+[Epoch 003] beta=0.050 | loss=0.0882 | P=0.1059 R=0.9912 F1=0.1912 Acc=0.9659
+Epoch 4/20: 100%|██████████| 125/125 [00:06<00:00, 19.41it/s, f1=0.258, kl=0.000245, loss=0.0573]
+[Epoch 004] beta=0.067 | loss=0.0674 | P=0.1334 R=0.9892 F1=0.2349 Acc=0.9741
+Epoch 5/20: 100%|██████████| 125/125 [00:06<00:00, 18.28it/s, f1=0.271, kl=9.72e-5, loss=0.0636]
+Epoch 6/20:   0%|          | 0/125 [00:00<?, ?it/s][Epoch 005] beta=0.083 | loss=0.0590 | P=0.1499 R=0.9882 F1=0.2602 Acc=0.9774
+Epoch 6/20: 100%|██████████| 125/125 [00:06<00:00, 19.94it/s, f1=0.278, kl=3.84e-5, loss=0.0522]
+[Epoch 006] beta=0.100 | loss=0.0556 | P=0.1610 R=0.9873 F1=0.2768 Acc=0.9793
+Epoch 7/20: 100%|██████████| 125/125 [00:06<00:00, 20.43it/s, f1=0.298, kl=3.55e-5, loss=0.0446]
+[Epoch 007] beta=0.100 | loss=0.0532 | P=0.1702 R=0.9864 F1=0.2902 Acc=0.9806
+Epoch 8/20: 100%|██████████| 125/125 [00:06<00:00, 19.12it/s, f1=0.308, kl=2.8e-5, loss=0.0418]
+Epoch 9/20:   0%|          | 0/125 [00:00<?, ?it/s][Epoch 008] beta=0.100 | loss=0.0509 | P=0.1768 R=0.9859 F1=0.2998 Acc=0.9815
+Epoch 9/20: 100%|██████████| 125/125 [00:06<00:00, 19.22it/s, f1=0.31, kl=8.72e-5, loss=0.0433]
+Epoch 10/20:   0%|          | 0/125 [00:00<?, ?it/s][Epoch 009] beta=0.100 | loss=0.0502 | P=0.1808 R=0.9854 F1=0.3055 Acc=0.9820
+Epoch 10/20: 100%|██████████| 125/125 [00:06<00:00, 20.15it/s, f1=0.321, kl=5.27e-5, loss=0.0484]
+[Epoch 010] beta=0.100 | loss=0.0487 | P=0.1847 R=0.9853 F1=0.3110 Acc=0.9825
+Epoch 11/20: 100%|██████████| 125/125 [00:06<00:00, 20.43it/s, f1=0.316, kl=4.81e-5, loss=0.0444]
+[Epoch 011] beta=0.100 | loss=0.0481 | P=0.1887 R=0.9852 F1=0.3167 Acc=0.9829
+Epoch 12/20: 100%|██████████| 125/125 [00:06<00:00, 20.35it/s, f1=0.327, kl=0.0001, loss=0.0489]
+Epoch 13/20:   0%|          | 0/125 [00:00<?, ?it/s][Epoch 012] beta=0.100 | loss=0.0480 | P=0.1908 R=0.9849 F1=0.3196 Acc=0.9832
+Epoch 13/20: 100%|██████████| 125/125 [00:06<00:00, 20.22it/s, f1=0.315, kl=0.000102, loss=0.0464]
+[Epoch 013] beta=0.100 | loss=0.0478 | P=0.1930 R=0.9847 F1=0.3227 Acc=0.9834
+Epoch 14/20: 100%|██████████| 125/125 [00:07<00:00, 17.85it/s, f1=0.317, kl=8.56e-5, loss=0.0512]
+Epoch 15/20:   0%|          | 0/125 [00:00<?, ?it/s][Epoch 014] beta=0.100 | loss=0.0474 | P=0.1942 R=0.9850 F1=0.3243 Acc=0.9835
+Epoch 15/20: 100%|██████████| 125/125 [00:06<00:00, 19.20it/s, f1=0.328, kl=7.92e-5, loss=0.0536]
+[Epoch 015] beta=0.100 | loss=0.0471 | P=0.1953 R=0.9847 F1=0.3258 Acc=0.9836
+Epoch 16/20: 100%|██████████| 125/125 [00:06<00:00, 19.71it/s, f1=0.332, kl=7.74e-5, loss=0.0461]
+[Epoch 016] beta=0.100 | loss=0.0464 | P=0.1964 R=0.9849 F1=0.3274 Acc=0.9838
+Epoch 17/20: 100%|██████████| 125/125 [00:06<00:00, 20.34it/s, f1=0.338, kl=0.000128, loss=0.0452]
+Epoch 18/20:   0%|          | 0/125 [00:00<?, ?it/s][Epoch 017] beta=0.100 | loss=0.0469 | P=0.1976 R=0.9842 F1=0.3290 Acc=0.9839
+Epoch 18/20: 100%|██████████| 125/125 [00:06<00:00, 20.49it/s, f1=0.317, kl=6.56e-5, loss=0.0451]
+Epoch 19/20:   0%|          | 0/125 [00:00<?, ?it/s][Epoch 018] beta=0.100 | loss=0.0461 | P=0.1979 R=0.9848 F1=0.3295 Acc=0.9839
+Epoch 19/20: 100%|██████████| 125/125 [00:06<00:00, 19.72it/s, f1=0.333, kl=0.000124, loss=0.0451]
+Epoch 20/20:   0%|          | 0/125 [00:00<?, ?it/s][Epoch 019] beta=0.100 | loss=0.0462 | P=0.2000 R=0.9847 F1=0.3324 Acc=0.9841
+Epoch 20/20: 100%|██████████| 125/125 [00:06<00:00, 19.61it/s, f1=0.319, kl=0.000111, loss=0.0534]
+[Epoch 020] beta=0.100 | loss=0.0454 | P=0.2001 R=0.9846 F1=0.3325 Acc=0.9841
+
+=== Evaluation (greedy, fast) ===
+Eval (greedy): 100%|██████████| 63/63 [00:48<00:00,  1.30it/s]
+Eval (+2-opt):   0%|          | 0/125 [00:00<?, ?it/s]Edge metrics: P=0.1937  R=0.9881  F1=0.3239  Acc=0.9835
+Length (pred/opt): 20.788 / 16.715
+Gap (mean): 24.37%
+
+=== Evaluation (+2-opt, slower but better tours) ===
+Eval (+2-opt): 100%|██████████| 125/125 [2:19:32<00:00, 66.98s/it]
+Edge metrics: P=0.1937  R=0.9881  F1=0.3239  Acc=0.9835
+Length (pred/opt): 14.408 / 16.715
+Gap (mean): -13.81%
+
+进程已结束，退出代码为 0
