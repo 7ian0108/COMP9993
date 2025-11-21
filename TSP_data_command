@@ -1,0 +1,9 @@
+python -u generate_data.py ^
+  --min_nodes 500 ^
+  --max_nodes 500 ^
+  --num_samples 500 ^
+  --batch_size 4 ^
+  --filename "tsp500_train_lkh_100.txt" ^
+  --solver lkh ^
+  --lkh_trails 10 ^
+  --seed 1234
