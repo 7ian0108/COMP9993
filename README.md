@@ -27,7 +27,7 @@ For both molecules and TSP tours, I use a **GraphVAE** with:
 - **Encoder**
   - Multi layer **GCNConv** backbone.
   - Optional **TopKPooling** for graph-level pooling.
-  - Outputs mean \mu and log-variance \(\log \sigma^2\) for the latent vector.
+  - Outputs mean $\mu$ and log-variance \(\log \sigma^2\) for the latent vector.
   - Node features = original attributes + **SinCos positional encoding** (Random PE vs. Degree-based PE).
 
 - **Latent space**
