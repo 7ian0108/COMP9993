@@ -32,7 +32,7 @@ For both molecules and TSP tours, I use a **GraphVAE** with:
 
 - **Latent space**
   - Continuous latent vector $z \in \mathbb{R}^d$.
-  - Trained with standard **VAE loss** (reconstruction + KL divergence with warm-up).
+  - Trained with standard **VAE loss** (reconstruction + KL divergence with warm up).
 
 - **Decoder**
   - Transformer style decoder for molecular graphs (QM9, ZINC).
@@ -47,8 +47,8 @@ For TSP, the final pipeline uses **V3 GraphVAE** + **DDPM**:
 
 - The VAE encodes the **TSP binary adjacency matrix** into a low dimensional latent vector.
 - A **DDPM style diffusion model** is trained **only in the latent space**:
-  - Forward process: gradually adds Gaussian noise to $ z $.
-  - Reverse process: denoises $ z_t \rightarrow z_0 $ using a U-Net, MLP-style network.
+  - Forward process: gradually adds Gaussian noise to $z$.
+  - Reverse process: denoises $z_t \rightarrow z_0$ using a U-Net, MLP-style network.
 - The denoised latent is decoded back to a TSP tour by the GraphVAE decoder.
 
 ---
