@@ -11,7 +11,7 @@ This repository contains my COMP9993 research project on **graph-based generativ
 The main goals are:
 
 - Compress graph-structured solutions (molecular graphs, TSP tours) into a **latent representation** with **GraphVAE**.
-- Train **diffusion models** (DDPM/DDIM style) in this latent space to generate new valid structures.
+- Train **diffusion models** (DDPM, DDIM style) in this latent space to generate new valid structures.
 - Evaluate the pipeline on:
   - **QM9, ZINC** molecular datasets (graph reconstruction).
   - **TSP-20, TSP-50, TSP-100** (tour generation, GAP metric).
@@ -25,9 +25,9 @@ The main goals are:
 For both molecules and TSP tours, I use a **GraphVAE** with:
 
 - **Encoder**
-  - Multi-layer **GCNConv** backbone.
+  - Multi layer **GCNConv** backbone.
   - Optional **TopKPooling** for graph-level pooling.
-  - Outputs mean \(\mu\) and log-variance \(\log \sigma^2\) for the latent vector.
+  - Outputs mean \mu and log-variance \(\log \sigma^2\) for the latent vector.
   - Node features = original attributes + **SinCos positional encoding** (Random PE vs. Degree-based PE).
 
 - **Latent space**
