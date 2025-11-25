@@ -1,6 +1,6 @@
 # COMP9993 - GraphVAE + Diffusion for Combinatorial Optimization
 
-> Graph generative modelling for molecules (QM9/ZINC) and TSP using GraphVAE and diffusion models.  
+> Graph generative modelling for molecules (QM9, ZINC) and TSP using GraphVAE and diffusion models.  
 
 
 ---
@@ -11,7 +11,7 @@ This repository contains my COMP9993 research project on **graph-based generativ
 The main goals are:
 
 - Compress graph-structured solutions (molecular graphs, TSP tours) into a **latent representation** with **GraphVAE**.
-- Train **diffusion models** (DDPM/DDIM-style) in this latent space to generate new valid structures.
+- Train **diffusion models** (DDPM/DDIM style) in this latent space to generate new valid structures.
 - Evaluate the pipeline on:
   - **QM9 / ZINC** molecular datasets (graph reconstruction).
   - **TSP-20 / TSP-50 / TSP-100** (tour generation, GAP metric).
