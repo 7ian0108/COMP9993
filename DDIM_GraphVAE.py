@@ -20,11 +20,6 @@ from sklearn.metrics import roc_auc_score, average_precision_score
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
-
-# ============================================================
-# 0. 基础工具
-# ============================================================
-
 def sinusoidal_pe(num_nodes: int, dim: int, device: torch.device) -> torch.Tensor:
     pe = torch.zeros(num_nodes, dim, device=device)
     position = torch.arange(0, num_nodes, device=device).unsqueeze(1)
@@ -64,9 +59,7 @@ def kl_normal(mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
     return -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
 
 
-# ============================================================
 # 1. Encoder with TopKPooling
-# ============================================================
 
 class GCNEncoderWithPool(nn.Module):
     def __init__(self, in_dim: int, pe_dim: int, hidden_dim: int,
@@ -91,10 +84,7 @@ class GCNEncoderWithPool(nn.Module):
         logvar_pool = logvar[perm]
         return z_pool, mu_pool, logvar_pool, edge_index_pool, batch_pool
 
-
-# ============================================================
 # 2. SmallGraphHead
-# ============================================================
 
 class SmallGraphHead(nn.Module):
     def __init__(self, in_dim: int, hidden_dim: int):
@@ -120,10 +110,7 @@ class SmallGraphHead(nn.Module):
         logits_small_clean = logits_small_clean.masked_fill(eye, float('-inf'))
         return h_small, h_mask, logits_small_clean
 
-
-# ============================================================
 # 3. DDIM Components
-# ============================================================
 
 class SinTimeEmbed(nn.Module):
     def __init__(self, dim):
@@ -140,13 +127,6 @@ class SinTimeEmbed(nn.Module):
 
 
 class DDIMDiffusionSchedule:
-    """
-    训练阶段与 DDPM 相同（用 q(x_t | x_0) 加噪，loss 预测 ε）；
-    推理阶段使用 DDIM 的确定性步进：
-      x_{t-1} = sqrt(alpha_bar_{t-1}) * x0_hat
-                + sqrt(1 - alpha_bar_{t-1}) * eps_hat
-      其中 x0_hat = (x_t - sqrt(1 - alpha_bar_t)*eps_hat) / sqrt(alpha_bar_t)
-    """
     def __init__(self, T: int = 1000, beta_start=1e-4, beta_end=2e-2, device="cpu"):
         self.T = T
         self.device = device
@@ -174,21 +154,13 @@ class DDIMDiffusionSchedule:
 
         x0_hat = (x_t - torch.sqrt(1.0 - a_t) * eps_hat) / torch.sqrt(a_t + 1e-12)
         x_prev = torch.sqrt(a_prev) * x0_hat + torch.sqrt(1.0 - a_prev) * eps_hat
-        return x_prev.clamp_(0.0, 1.0)  # 我们把小图当概率矩阵，截断到[0,1]
+        return x_prev.clamp_(0.0, 1.0) 
 
     @torch.no_grad()
     def ddim_sample(self, eps_net, h_small, h_small_mask, Kmax: int,
                     steps: int = 50, device="cpu", time_index: Optional[List[int]] = None):
-        """
-        从纯噪声出发的 DDIM 采样，返回 [B,Kmax,Kmax] 概率矩阵。
-        - eps_net: εθ(h_small, t, x_t) -> eps
-        - h_small/h_small_mask: 条件
-        - steps: 采样步数（<= T）
-        - time_index: 可选的时间子序列（降序），否则均匀子采样
-        """
         B = h_small.size(0)
         if time_index is None:
-            # 均匀子采样 T/steps 个点（含0）
             full = torch.linspace(self.T-1, 0, steps, device=device).long()
             time_index = full.tolist()
         else:
@@ -196,7 +168,6 @@ class DDIMDiffusionSchedule:
             assert time_index[0] < self.T and time_index[-1] >= 0
             assert all(time_index[i] > time_index[i+1] for i in range(len(time_index)-1))
 
-        # 初始从N(0,1)出发，再映射近似到[0,1]（用sigmoid也可，这里直接标准化+截断）
         x_t = torch.randn(B, Kmax, Kmax, device=device)
         x_t = (x_t - x_t.min()) / (x_t.max() - x_t.min() + 1e-8)
 
@@ -206,7 +177,6 @@ class DDIMDiffusionSchedule:
             eps_hat = eps_net(h_small, h_small_mask, x_t, t)
             x_t = self.ddim_step(x_t, t, t_prev, eps_hat)
 
-            # 屏蔽无效小图节点对与自环
             valid_row = h_small_mask.unsqueeze(2)
             valid_col = h_small_mask.unsqueeze(1)
             valid_mat = (valid_row & valid_col)
@@ -214,13 +184,11 @@ class DDIMDiffusionSchedule:
             eye = torch.eye(Kmax, device=device, dtype=torch.bool).unsqueeze(0)
             x_t = x_t.masked_fill(eye, 0.0)
 
-        return x_t  # [B,Kmax,Kmax] 概率矩阵
+        return x_t  
 
 
 class SmallGraphDDIMDenoiser(nn.Module):
-    """
-    与 DDPM 版本相同的 εθ 结构；DDIM 与 DDPM 的训练目标相同（预测噪声 ε）。
-    """
+
     def __init__(self, node_dim: int, time_dim: int = 64, hidden_dim: int = 128):
         super().__init__()
         self.time_embed = SinTimeEmbed(time_dim)
@@ -258,9 +226,7 @@ class SmallGraphDDIMDenoiser(nn.Module):
         return eps_pred
 
 
-# ============================================================
-# 4. TransformerDecoderCross (大图解码)
-# ============================================================
+# 4. TransformerDecoderCross 
 
 class TransformerDecoderCross(nn.Module):
     def __init__(self, latent_dim: int, pe_dim: int,
@@ -312,10 +278,6 @@ class TransformerDecoderCross(nn.Module):
         return logits_big
 
 
-# ============================================================
-# 5. 总模型 GraphGenModel（DDIM 版本）
-# ============================================================
-
 class GraphGenModel(nn.Module):
     def __init__(self,
                  in_dim_nodefeat: int,
@@ -326,7 +288,7 @@ class GraphGenModel(nn.Module):
                  small_hidden_dim: int,
                  dec_heads: int,
                  dec_layers: int,
-                 ddpm_T: int = 1000,  # 时间轴总步数，沿用命名
+                 ddpm_T: int = 1000, 
                  device: torch.device = torch.device("cpu")):
         super().__init__()
 
@@ -339,7 +301,6 @@ class GraphGenModel(nn.Module):
         )
         self.small_head = SmallGraphHead(in_dim=latent_dim, hidden_dim=small_hidden_dim)
 
-        # —— 核心替换：DDIM Schedule & Denoiser ——
         self.ddim_schedule = DDIMDiffusionSchedule(
             T=ddpm_T, beta_start=1e-4, beta_end=2e-2, device=device
         )
@@ -365,8 +326,6 @@ class GraphGenModel(nn.Module):
 
         x_dense_big, node_mask_big = to_dense_batch(x_all, batch_vec)
         B, Nmax, _ = x_dense_big.shape
-
-        # 共享 SinCosPE（与 encoder/decoder 统一）
         pe_list_flat = []
         for b in range(B):
             n_b = int(node_mask_big[b].sum())
@@ -380,11 +339,10 @@ class GraphGenModel(nn.Module):
             edge_index=edge_index_all, batch_vec=batch_vec
         )
 
-        # 小图骨架（干净 x0 概率）
         h_small, h_small_mask, logits_small_clean = self.small_head(z_pool, batch_pool)
         A_clean = torch.sigmoid(logits_small_clean)  # x0
 
-        # DDIM 训练等价于 DDPM 的噪声预测训练：随机 t，加噪，MSE(ε_pred, ε_true)
+
         t = torch.randint(low=0, high=self.ddim_schedule.T, size=(B,), device=device)
         x_t, noise_true = self.ddim_schedule.sample_xt(A_clean, t)
         noise_pred = self.ddim_denoiser(h_small, h_small_mask, x_t, t)
@@ -392,8 +350,7 @@ class GraphGenModel(nn.Module):
         mu_pool_d, _ = to_dense_batch(mu_pool, batch_pool)
         logvar_pool_d, _ = to_dense_batch(logvar_pool, batch_pool)
 
-        # 还原大图（注意：训练阶段仍使用 clean h_small 作为 memory）
-        # （也可尝试把 x_t -> x0_hat 的一步反推作为 memory，但先保持稳定版）
+
         pe_dense_big = []
         idx = 0
         for b in range(B):
@@ -414,14 +371,10 @@ class GraphGenModel(nn.Module):
         return (logits_big, node_mask_big, mu_pool_d, logvar_pool_d,
                 h_small_mask, noise_pred, noise_true, t, A_clean, h_small)
 
-    # ---------------- 推理：DDIM 采样（可选在验证/测试时调用） ----------------
     @torch.no_grad()
     def ddim_sample_small(self, h_small, h_small_mask, steps: int = 50,
                           time_index: Optional[List[int]] = None):
-        """
-        用 DDIM 从纯噪声确定性生成小图概率矩阵 A_small ∈ [0,1]^(B×K×K)
-        然后你可以把它交给 decoder 还原成大图。
-        """
+
         device = h_small.device
         B, Kmax, _ = h_small.shape
         A_small = self.ddim_schedule.ddim_sample(
@@ -436,9 +389,6 @@ class GraphGenModel(nn.Module):
         return A_small  # [B,Kmax,Kmax]
 
 
-# ============================================================
-# 6. 训练
-# ============================================================
 
 def train_model(
     epochs=50,
@@ -500,7 +450,7 @@ def train_model(
                  h_small_mask, noise_pred, noise_true, t_batch,
                  A_clean, h_small) = model(data)
 
-                # 大图 BCE
+
                 B, Nmax, _ = logits_big.shape
                 adj_dense_big = to_dense_adj(data.edge_index, batch=data.batch)
                 triu_mask_big = torch.triu(torch.ones(Nmax, Nmax, device=device, dtype=torch.bool), 1).unsqueeze(0)
@@ -520,7 +470,7 @@ def train_model(
                 else:
                     loss_kl = torch.tensor(0.0, device=device)
 
-                # DDIM (训练仍为 MSE ε)
+                # DDIM
                 triu_mask_small = torch.triu(torch.ones(Kmax, Kmax, device=device, dtype=torch.bool), 1).unsqueeze(0)
                 valid_pairs_small = (h_small_mask.unsqueeze(2) &
                                      h_small_mask.unsqueeze(1) & triu_mask_small)
@@ -559,9 +509,6 @@ def train_model(
               f"F1={total_f1/max(1,total_cnt):.4f} Acc={total_acc/max(1,total_cnt):.4f}")
 
 
-# ============================================================
-# 7. main
-# ============================================================
 
 if __name__ == "__main__":
     train_model(
@@ -575,3 +522,4 @@ if __name__ == "__main__":
         lr=1e-3,
         num_workers=2
     )
+
