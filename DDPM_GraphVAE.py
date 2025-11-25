@@ -21,9 +21,6 @@ from sklearn.metrics import roc_auc_score, average_precision_score
 warnings.filterwarnings("ignore", category=UserWarning)
 
 
-# ============================================================
-# 0. 基础工具
-# ============================================================
 
 def sinusoidal_pe(num_nodes: int, dim: int, device: torch.device) -> torch.Tensor:
     """
@@ -40,13 +37,6 @@ def sinusoidal_pe(num_nodes: int, dim: int, device: torch.device) -> torch.Tenso
 
 @torch.no_grad()
 def calc_binary_metrics(prob: torch.Tensor, target: torch.Tensor):
-    """
-    输入:
-      prob   : [M] 预测概率(sigmoid后)
-      target : [M] 0/1
-    返回:
-      precision, recall, f1, acc, auc_roc, ap
-    """
     pred_bin = (prob > 0.5).float()
 
     tp = (pred_bin * target).sum()
@@ -83,10 +73,6 @@ def kl_normal(mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
     """
     return -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
 
-
-# ============================================================
-# 1. Encoder with TopKPooling
-# ============================================================
 
 class GCNEncoderWithPool(nn.Module):
     """
@@ -132,12 +118,6 @@ class GCNEncoderWithPool(nn.Module):
         return z_pool, mu_pool, logvar_pool, edge_index_pool, batch_pool
 
 
-# ============================================================
-# 2. SmallGraphHead
-#    - 把 pooled latent 节点 z_pool -> h_small (小图节点表示)
-#    - 基于 pair-wise MLP 得到小图骨架 logits_small_clean
-# ============================================================
-
 class SmallGraphHead(nn.Module):
     def __init__(self, in_dim: int, hidden_dim: int):
         super().__init__()
@@ -149,14 +129,6 @@ class SmallGraphHead(nn.Module):
         )
 
     def forward(self, z_pool, batch_pool):
-        """
-        z_pool:     [sumK, latent_dim]
-        batch_pool: [sumK]
-        返回:
-          h_small:             [B, Kmax, H]
-          h_small_mask:        [B, Kmax]  True=节点有效
-          logits_small_clean:  [B, Kmax, Kmax]  小图骨架的logits
-        """
         h_all = self.node_proj(z_pool)  # [sumK, H]
         h_small, h_mask = to_dense_batch(h_all, batch_pool)  # [B,Kmax,H], [B,Kmax]
 
@@ -174,23 +146,12 @@ class SmallGraphHead(nn.Module):
         return h_small, h_mask, logits_small_clean
 
 
-# ============================================================
-# 3. DDPM Components
-#    - 时间嵌入 SinTimeEmbed
-#    - DDPMDiffusionSchedule (alpha_bar 等放到指定 device 上)
-#    - SmallGraphDDPMDenoiser: εθ 预测噪声
-# ============================================================
-
 class SinTimeEmbed(nn.Module):
     def __init__(self, dim):
         super().__init__()
         assert dim % 2 == 0
         self.dim = dim
     def forward(self, t):
-        """
-        t: [B] long
-        return: [B, dim] 正弦/余弦时间编码
-        """
         half = self.dim // 2
         device = t.device
         freqs = torch.exp(
@@ -202,13 +163,6 @@ class SinTimeEmbed(nn.Module):
 
 
 class DDPMDiffusionSchedule:
-    """
-    标准 DDPM 调度器:
-    - 线性 beta_t
-    - alpha_t = 1 - beta_t
-    - alpha_bar_t = prod_{s<=t} alpha_s
-    提供 q(x_t | x_0) 采样: x_t = sqrt(alpha_bar_t)*x0 + sqrt(1-alpha_bar_t)*eps
-    """
     def __init__(self, T: int = 1000, beta_start=1e-4, beta_end=2e-2, device="cpu"):
         self.T = T
         self.device = device
@@ -233,11 +187,6 @@ class DDPMDiffusionSchedule:
 
 
 class SmallGraphDDPMDenoiser(nn.Module):
-    """
-    εθ(h_small, t, x_t) -> 预测噪声 ε_hat
-    我们用 h_small 给节点级上下文 + 时间条件。
-    这里简化为“node-only + time”条件，不显式拼 x_t；如果想更强可以把 x_t 也拼到pair特征中。
-    """
     def __init__(self, node_dim: int, time_dim: int = 64, hidden_dim: int = 128):
         super().__init__()
         self.time_embed = SinTimeEmbed(time_dim)
@@ -256,15 +205,6 @@ class SmallGraphDDPMDenoiser(nn.Module):
         )
 
     def forward(self, h_small, h_small_mask, x_t, t):
-        """
-        h_small:      [B,K,H]
-        h_small_mask: [B,K] True=有效节点
-        x_t:          [B,K,K]  (目前没拼进MPL特征，但保留参数位，之后可增强)
-        t:            [B] long
-
-        return:
-          eps_pred:   [B,K,K]  预测噪声 ε_hat
-        """
         B, K, H = h_small.shape
         # time conditioning
         t_emb = self.time_mlp(self.time_embed(t))  # [B,H]
@@ -276,25 +216,16 @@ class SmallGraphDDPMDenoiser(nn.Module):
 
         eps_pred = self.edge_mlp(pair).squeeze(-1)  # [B,K,K]
 
-        # mask无效节点对 -> 置0
         valid_row = h_small_mask.unsqueeze(2)       # [B,K,1]
         valid_col = h_small_mask.unsqueeze(1)       # [B,1,K]
         valid_mat = (valid_row & valid_col)         # [B,K,K]
         eps_pred = eps_pred.masked_fill(~valid_mat, 0.0)
 
-        # 自环无意义 -> 置0
         eye = torch.eye(K, device=h_small.device, dtype=torch.bool).unsqueeze(0)
         eps_pred = eps_pred.masked_fill(eye, 0.0)
 
         return eps_pred
 
-
-# ============================================================
-# 4. TransformerDecoderCross
-#    - 用小图节点表征当 memory
-#    - 用相同 SinCosPE 构建大图 query
-#    - 输出还原大图邻接 logits_big
-# ============================================================
 
 class TransformerDecoderCross(nn.Module):
     def __init__(self, latent_dim: int, pe_dim: int,
@@ -318,12 +249,6 @@ class TransformerDecoderCross(nn.Module):
         )
 
     def forward(self, node_mask_big, pe_dense_big, h_small_memory, h_small_mask):
-        """
-        node_mask_big:   [B,Nmax] True=有效节点
-        pe_dense_big:    [B,Nmax,pe_dim]  (与 encoder 一致生成的 SinCosPE)
-        h_small_memory:  [B,Kmax,H] 小图节点memory (refined小图结构感知)
-        h_small_mask:    [B,Kmax] True=有效小图节点
-        """
         B, Nmax, pe_dim = pe_dense_big.shape
         feat_dim = self.input_proj.in_features - pe_dim
         device = pe_dense_big.device
@@ -347,33 +272,18 @@ class TransformerDecoderCross(nn.Module):
         pair_big = torch.cat([Hi, Hj], dim=-1)              # [B,Nmax,Nmax,2H]
         logits_big = self.edge_mlp(pair_big).squeeze(-1)    # [B,Nmax,Nmax]
 
-        # mask无效区域
         valid_row = node_mask_big.unsqueeze(2)
         valid_col = node_mask_big.unsqueeze(1)
         valid_mat = (valid_row & valid_col)
         logits_big = logits_big.masked_fill(~valid_mat, float('-inf'))
 
-        # 去掉自环
         eye_big = torch.eye(Nmax, device=device, dtype=torch.bool).unsqueeze(0)
         logits_big = logits_big.masked_fill(eye_big, float('-inf'))
 
         return logits_big
 
 
-# ============================================================
-# 5. 总模型 GraphGenModel
-# ============================================================
-
 class GraphGenModel(nn.Module):
-    """
-    主流程:
-    1. 大图 -> Encoder+TopKPooling -> 小图 latent 节点
-    2. small_head 得到 h_small & 小图骨架 logits_small_clean
-    3. 把 logits_small_clean 过 sigmoid 当作 x0 (干净小图概率矩阵)
-    4. DDPM: 随机时间步 t, 根据 q(x_t|x0) 采样 x_t 和 真噪声 eps_true
-       再用 SmallGraphDDPMDenoiser 预测 eps_pred (εθ)
-    5. Decoder: 用 h_small 作为 memory，配合同一份 SinCosPE，重建大图邻接 logits_big
-    """
     def __init__(self,
                  in_dim_nodefeat: int,
                  pe_dim: int,
@@ -400,7 +310,6 @@ class GraphGenModel(nn.Module):
             hidden_dim=small_hidden_dim
         )
 
-        # <<< 修复点：把schedule放到正确device上 >>>
         self.ddpm_schedule = DDPMDiffusionSchedule(
             T=ddpm_T,
             beta_start=1e-4,
@@ -426,22 +335,9 @@ class GraphGenModel(nn.Module):
         self.in_dim_nodefeat = in_dim_nodefeat
 
     def forward(self, data):
-        """
-        data: torch_geometric 的 batch Data
-        返回:
-          logits_big:    [B,Nmax,Nmax] 大图预测边logits
-          node_mask_big: [B,Nmax]      大图有效节点mask
-          mu_pool_d:     [B,Kmax,Z]
-          logvar_pool_d: [B,Kmax,Z]
-          h_small_mask:  [B,Kmax]
-          noise_pred:    [B,Kmax,Kmax]  预测噪声 ε_hat
-          noise_true:    [B,Kmax,Kmax]  实际噪声 ε
-          t:             [B]            这次sample的时间步
-          A_clean:       [B,Kmax,Kmax]  干净小图概率矩阵 x0 (仅用于debug/分析)
-        """
         device = data.x.device
 
-        # ---------- 1) Dense化原图 + SinCosPE (共享) ----------
+
         x_all = data.x                     # [sumN, F]
         edge_index_all = data.edge_index   # [2,sumE]
         batch_vec = data.batch             # [sumN]
@@ -449,7 +345,7 @@ class GraphGenModel(nn.Module):
         x_dense_big, node_mask_big = to_dense_batch(x_all, batch_vec)  # [B,Nmax,F], [B,Nmax]
         B, Nmax, _ = x_dense_big.shape
 
-        # 逐图生成 PE，拼成 pe_concat (与 x_all 顺序对齐)
+
         pe_list_flat = []
         for b in range(B):
             n_b = int(node_mask_big[b].sum())
@@ -457,7 +353,7 @@ class GraphGenModel(nn.Module):
             pe_list_flat.append(pe_b)
         pe_concat = torch.cat(pe_list_flat, dim=0)          # [sumN, pe_dim]
 
-        # ---------- 2) Encoder + TopKPooling 变小图 ----------
+
         z_pool, mu_pool, logvar_pool, edge_index_pool, batch_pool = self.encoder(
             x_raw=x_all,
             pe_nodefeat=pe_concat,
@@ -467,7 +363,6 @@ class GraphGenModel(nn.Module):
         # z_pool: [sumK, latent_dim]
         # batch_pool: [sumK]
 
-        # ---------- 3) SmallGraphHead 得到小图骨架 ----------
         h_small, h_small_mask, logits_small_clean = self.small_head(
             z_pool, batch_pool
         )
@@ -475,10 +370,8 @@ class GraphGenModel(nn.Module):
         # h_small_mask:       [B,Kmax]
         # logits_small_clean: [B,Kmax,Kmax]
 
-        # 把小图骨架 logits -> 概率，作为 DDPM 的 x0
         A_clean = torch.sigmoid(logits_small_clean)  # [B,Kmax,Kmax], in [0,1]
 
-        # ---------- 4) DDPM 前向扩散采样随机 t ----------
         t = torch.randint(
             low=0,
             high=self.ddpm_schedule.T,
@@ -487,17 +380,13 @@ class GraphGenModel(nn.Module):
         )  # [B]
         x_t, noise_true = self.ddpm_schedule.sample_xt(A_clean, t)  # [B,Kmax,Kmax] each
 
-        # ---------- 5) DDPM 噪声预测 εθ ----------
         noise_pred = self.ddpm_denoiser(
             h_small, h_small_mask, x_t, t
         )  # [B,Kmax,Kmax]
 
-        # ---------- 6) pad mu/logvar 给 KL ----------
         mu_pool_d, _ = to_dense_batch(mu_pool, batch_pool)          # [B,Kmax,Z]
         logvar_pool_d, _ = to_dense_batch(logvar_pool, batch_pool)  # [B,Kmax,Z]
 
-        # ---------- 7) Decoder：同一 SinCosPE 还原大图 ----------
-        # 把 pe_concat 切回每个大图并 pad 到 Nmax -> pe_dense_big
         pe_dense_big = []
         idx_start = 0
         for b in range(B):
@@ -513,7 +402,7 @@ class GraphGenModel(nn.Module):
         logits_big = self.decoder(
             node_mask_big=node_mask_big,
             pe_dense_big=pe_dense_big,
-            h_small_memory=h_small,        # 目前直接用h_small当memory
+            h_small_memory=h_small,        
             h_small_mask=h_small_mask
         )  # [B,Nmax,Nmax]
 
@@ -529,10 +418,6 @@ class GraphGenModel(nn.Module):
             A_clean,
         )
 
-
-# ============================================================
-# 6. 训练
-# ============================================================
 
 def train_model(
     epochs=50,
@@ -568,12 +453,11 @@ def train_model(
         dec_heads=4,
         dec_layers=2,
         ddpm_T=1000,
-        device=device  # <<< 关键：把GPU/CPU传进去给DDPM schedule
+        device=device  
     ).to(device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
-    # 使用新的 torch.amp API，消掉 FutureWarning
     scaler = torch.amp.GradScaler("cuda", enabled=torch.cuda.is_available())
 
     # KL warmup
@@ -581,7 +465,7 @@ def train_model(
     beta_max = 0.5
 
     bce = nn.BCEWithLogitsLoss(reduction='mean')
-    mse = nn.MSELoss(reduction='mean')  # DDPM 噪声预测 MSE
+    mse = nn.MSELoss(reduction='mean')  
 
     for epoch in range(1, epochs + 1):
         model.train()
@@ -602,7 +486,6 @@ def train_model(
             data = data.to(device)
             optimizer.zero_grad(set_to_none=True)
 
-            # autocast 新写法
             with torch.amp.autocast("cuda", enabled=torch.cuda.is_available()):
                 (logits_big,
                  node_mask_big,
@@ -614,7 +497,6 @@ def train_model(
                  t_batch,
                  A_clean) = model(data)
 
-                # ========== 大图重建 BCE ==========
                 B, Nmax, _ = logits_big.shape
                 adj_dense_big = to_dense_adj(data.edge_index, batch=data.batch)  # [B,Nmax,Nmax]
 
@@ -632,7 +514,6 @@ def train_model(
 
                 loss_big_recon = bce(logits_big_u, target_big_u)
 
-                # ========== KL Loss ==========
                 B2, Kmax, Zdim = mu_pool_d.shape
                 valid_small_mask = h_small_mask.unsqueeze(-1).expand(-1, -1, Zdim)  # [B,Kmax,Z]
                 if valid_small_mask.any():
@@ -642,8 +523,6 @@ def train_model(
                 else:
                     loss_kl = torch.tensor(0.0, device=device)
 
-                # ========== DDPM 噪声预测 MSE ==========
-                # 只在小图有效节点对 (i<j) 上算
                 triu_mask_small = torch.triu(
                     torch.ones(Kmax, Kmax, device=device, dtype=torch.bool),
                     diagonal=1
@@ -661,7 +540,7 @@ def train_model(
                 else:
                     loss_ddpm = mse(eps_pred_u, eps_true_u)
 
-                # 总Loss
+
                 loss = loss_big_recon + beta_kl * loss_kl + loss_ddpm
 
             scaler.scale(loss).backward()
@@ -672,7 +551,7 @@ def train_model(
             total_loss_epoch += loss.item()
             total_cnt += 1
 
-            # 监控指标（针对大图重建）
+
             with torch.no_grad():
                 prob_big_u = torch.sigmoid(logits_big_u)
                 precision, recall, f1, acc, auc_val, ap_val = calc_binary_metrics(
@@ -705,9 +584,6 @@ def train_model(
               f"F1={avg_f1:.4f} Acc={avg_acc:.4f}")
 
 
-# ============================================================
-# 7. main
-# ============================================================
 
 if __name__ == "__main__":
     train_model(
@@ -719,5 +595,6 @@ if __name__ == "__main__":
         pool_ratio=0.5,
         small_hidden_dim=64,
         lr=1e-3,
-        num_workers=2   # Windows 下如果卡 dataloader，可以降成 0 或 1
+        num_workers=2   
     )
+
