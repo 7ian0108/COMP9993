@@ -14,20 +14,14 @@ from torch_geometric.loader import DataLoader
 from torch_geometric.nn import GCNConv, global_mean_pool
 from torch_geometric.utils import to_dense_adj, to_dense_batch
 
-# ================== 基础设置 ==================
+
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 os.environ["OMP_NUM_THREADS"] = "1"
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Using device:", device)
 
 
-# ================================================================
-# 1. 数据集：Concorde TSP（learning-tsp）
-#    假定：
-#      - 前 2N 个 token 是坐标
-#      - 最后 N 个 token 是 tour 顺序
-#      - 中间的通通丢弃
-# ================================================================
+
 class ConcordeTSPDataset(torch.utils.data.Dataset):
     def __init__(self, txt_path: str, max_instances: int = None):
         assert os.path.isfile(txt_path), f"Dataset file not found: {txt_path}"
@@ -55,17 +49,16 @@ class ConcordeTSPDataset(torch.utils.data.Dataset):
                         f"Line {line_id} too short: len={L}, need >= {2*N+N}"
                     )
 
-                # 坐标：前 2N
+
                 coords_flat = list(map(float, parts[: 2 * N]))
                 coords = np.asarray(coords_flat, dtype=np.float32).reshape(N, 2)
 
-                # tour：最后 N
+
                 tour_str = parts[-N:]
                 tour = np.asarray(tour_str, dtype=int)
-                if tour.max() >= N:  # 兼容 1-based
+                if tour.max() >= N: 
                     tour = tour - 1
-
-                # 完全有向图
+                    
                 rows, cols = [], []
                 for i in range(N):
                     for j in range(N):
@@ -82,7 +75,7 @@ class ConcordeTSPDataset(torch.utils.data.Dataset):
                     np.float32
                 )
 
-                # tour 边（有向）打 1
+
                 tour_edges = set()
                 for k in range(N):
                     u = int(tour[k])
@@ -120,9 +113,6 @@ class ConcordeTSPDataset(torch.utils.data.Dataset):
         return self.data_list[idx]
 
 
-# ================================================================
-# 2. 工具：SinCos PE & 时间嵌入 & KL & 指标
-# ================================================================
 def sinusoidal_pe(num_nodes: int, dim: int, device: torch.device) -> torch.Tensor:
     pe = torch.zeros(num_nodes, dim, device=device)
     position = torch.arange(0, num_nodes, device=device).unsqueeze(1)
@@ -183,7 +173,6 @@ def kl_normal(mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
     return -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
 
 
-# --------- tour 相关小工具 ---------
 def recover_tour_from_adj(A_sym: torch.Tensor) -> List[int]:
     """
     根据真实 tour 的对称邻接矩阵（0/1）恢复一个结点顺序。
@@ -196,7 +185,6 @@ def recover_tour_from_adj(A_sym: torch.Tensor) -> List[int]:
             if i != j and A_sym[i, j] > 0.5:
                 neighbors[i].append(j)
 
-    # 若图不是标准 tour（理论上不会），fallback 用最近邻
     if any(len(nb) != 2 for nb in neighbors.values()):
         prob_mat = A_sym
         return nearest_neighbor_tour(prob_mat)
@@ -213,11 +201,6 @@ def recover_tour_from_adj(A_sym: torch.Tensor) -> List[int]:
 
 
 def nearest_neighbor_tour(prob_mat: torch.Tensor) -> List[int]:
-    """
-    简单的最近邻贪心：从 0 出发，每次挑当前点对未访问点中
-    概率最大的边，最后回到起点。
-    prob_mat: [N,N]（建议对称）
-    """
     N = prob_mat.size(0)
     visited = [False] * N
     tour = [0]
@@ -231,14 +214,11 @@ def nearest_neighbor_tour(prob_mat: torch.Tensor) -> List[int]:
         tour.append(nxt)
         visited[nxt] = True
         cur = nxt
-    return tour  # 闭环长度时自己加上回到 0
+    return tour  
 
 
 def tour_length(coords: torch.Tensor, tour: List[int]) -> float:
-    """
-    coords: [N,2]
-    tour: list of node indices, 不含回到起点那条边
-    """
+
     N = len(tour)
     length = 0.0
     for i in range(N):
@@ -248,9 +228,6 @@ def tour_length(coords: torch.Tensor, tour: List[int]) -> float:
     return float(length)
 
 
-# ================================================================
-# 3. GraphVAE：Encoder / Decoder 共用 SinCos PE + 坐标
-# ================================================================
 class GraphVAEEncoder(nn.Module):
     def __init__(self, node_in_dim: int, pe_dim: int, hidden_dim: int, latent_dim: int):
         super().__init__()
@@ -261,15 +238,9 @@ class GraphVAEEncoder(nn.Module):
         self.fc_logvar = nn.Linear(hidden_dim, latent_dim)
 
     def forward(self, x, edge_index, edge_weight, batch, pe_dense):
-        """
-        x          : [sumN,2]  坐标
-        edge_index : [2,E]
-        edge_weight: [E]       距离
-        batch      : [sumN]
-        pe_dense   : [B,N,pe_dim]
-        """
+
         B, N, P = pe_dense.shape
-        pe_flat = pe_dense.view(B * N, P)  # 按 batch 顺序拼接
+        pe_flat = pe_dense.view(B * N, P) 
 
         x_in = torch.cat([x, pe_flat], dim=-1)  # [sumN, 2+pe]
         h = F.relu(self.gcn1(x_in, edge_index, edge_weight=edge_weight))
@@ -303,12 +274,7 @@ class GraphVAEDecoder(nn.Module):
         )
 
     def forward(self, z, pe_dense, coord_dense):
-        """
-        z           : [B,D]
-        pe_dense    : [B,N,pe_dim]
-        coord_dense : [B,N,2]
-        返回 logits_A: [B,N,N]
-        """
+       
         B, N, P = pe_dense.shape
         device = pe_dense.device
 
@@ -346,9 +312,6 @@ class GraphVAE(nn.Module):
         return logits_A, mu, logvar, z
 
 
-# ================================================================
-# 4. latent 空间上的 Gaussian DDPM（训练：预测 z0）
-# ================================================================
 class GaussianDDPMScheduleLatent:
     def __init__(self, T=100, beta_start=1e-4, beta_end=0.02, device="cpu"):
         self.T = T
@@ -384,19 +347,15 @@ class LatentDenoiseNet(nn.Module):
         return self.mlp(h)
 
 
-# --------- 采样：用 x0-pred + DDIM 式 deterministic 反向 ---------
 @torch.no_grad()
 def sample_z0_prior_ddim(denoise_net, diff_sched, batch_size, latent_dim):
-    """
-    从标准高斯采样 z_T，通过 DDIM 反向（η=0, x0-pred）得到 z_0。
-    """
     device = next(denoise_net.parameters()).device
     T = diff_sched.T
     z_t = torch.randn(batch_size, latent_dim, device=device)
 
     for t in reversed(range(T)):
         t_graph = torch.full((batch_size,), t, device=device, dtype=torch.long)
-        z0_hat = denoise_net(z_t, t_graph)  # 训练时的目标就是 z0
+        z0_hat = denoise_net(z_t, t_graph)  
 
         alpha_bar_t = diff_sched.alpha_bar[t]  # scalar
         if t > 0:
@@ -407,18 +366,15 @@ def sample_z0_prior_ddim(denoise_net, diff_sched, batch_size, latent_dim):
         alpha_bar_t_sqrt = torch.sqrt(alpha_bar_t)
         one_minus_t_sqrt = torch.sqrt(1.0 - alpha_bar_t + 1e-8)
 
-        # 反推 eps_hat，再用 DDIM 公式
         eps_hat = (z_t - alpha_bar_t_sqrt * z0_hat) / one_minus_t_sqrt
         z_t = torch.sqrt(alpha_bar_prev) * z0_hat + torch.sqrt(
             1.0 - alpha_bar_prev
         ) * eps_hat
 
-    return z_t  # 作为 z0_sample
+    return z_t  
 
 
-# ================================================================
-# 5. 训练：GraphVAE + latent DDPM
-# ================================================================
+
 def train_model(
     data_path: str = "./data/tsp/tsp20_train_concorde.txt",
     max_instances: int = 2000,
@@ -432,7 +388,7 @@ def train_model(
     T_latent: int = 100,
     beta_kl: float = 0.1,
     lambda_diff: float = 0.5,
-    pretrain_epochs: int = 10,  # 前若干 epoch 只训练 VAE
+    pretrain_epochs: int = 10,  
 ):
     dataset = ConcordeTSPDataset(data_path, max_instances=max_instances)
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
@@ -472,20 +428,20 @@ def train_model(
             batch_vec = batch_data.batch
             B = batch_data.num_graphs
 
-            # ---------- tour 对称邻接 A_sym: [B,N,N] ----------
+      
             adj_dense = to_dense_adj(
                 edge_index, batch=batch_vec, edge_attr=y_edge.unsqueeze(-1)
             ).squeeze(1)  # [B,N,N]
             A_sym = ((adj_dense + adj_dense.transpose(1, 2)) > 0).float()
 
-            # ---------- SinCos PE ----------
+       
             pe_list = [sinusoidal_pe(N, pe_dim, device) for _ in range(B)]
             pe_dense = torch.stack(pe_list, dim=0)  # [B,N,pe]
 
-            # ---------- 坐标 dense ----------
+ 
             x_dense, _ = to_dense_batch(x, batch_vec)  # [B,N,2]
 
-            # ---------- GraphVAE ----------
+
             logits_A, mu, logvar, z0 = vae(batch_data, pe_dense, x_dense)  # logits_A: [B,N,N]
 
             triu_mask = torch.triu(
@@ -494,7 +450,7 @@ def train_model(
             logits_u = logits_A[:, triu_mask].reshape(-1)
             target_u = A_sym[:, triu_mask].reshape(-1)
 
-            # 动态 pos_weight
+
             pos = target_u.sum()
             total = target_u.numel()
             neg = total - pos
@@ -509,7 +465,7 @@ def train_model(
             kl = kl_normal(mu, logvar)
             vae_loss = recon_loss + beta_kl * kl
 
-            # ---------- latent DDPM ----------
+ 
             z0_det = z0.detach()
             t_graph = torch.randint(
                 0, diff_sched.T, (B,), device=device, dtype=torch.long
@@ -554,9 +510,6 @@ def train_model(
     return vae, denoise_net, diff_sched, dataset
 
 
-# ================================================================
-# 6. 采样 + tour 解码评估
-# ================================================================
 @torch.no_grad()
 def evaluate_sampling(
     vae: GraphVAE,
@@ -567,10 +520,7 @@ def evaluate_sampling(
     latent_dim: int,
     num_graphs: int = 200,
 ):
-    """
-    用 diffusion 先从先验采样 z0，再用 VAE decoder + 贪心最近邻生成 tour，
-    计算生成 tour 的平均长度与真实最优 tour 的比值。
-    """
+
     vae.eval()
     denoise_net.eval()
 
@@ -594,34 +544,34 @@ def evaluate_sampling(
         batch_vec = batch_data.batch
         B = batch_data.num_graphs
 
-        # 真值 tour 邻接
+
         adj_dense = to_dense_adj(
             edge_index, batch=batch_vec, edge_attr=y_edge.unsqueeze(-1)
         ).squeeze(1)  # [B,N,N]
         A_sym_true = ((adj_dense + adj_dense.transpose(1, 2)) > 0).float()
 
-        # 坐标 dense
+
         coords_dense, _ = to_dense_batch(x, batch_vec)  # [B,N,2]
 
         # SinCos PE
         pe_list = [sinusoidal_pe(N, pe_dim, device) for _ in range(B)]
         pe_dense = torch.stack(pe_list, dim=0)  # [B,N,pe]
 
-        # 真值 tour & length
+
         true_lengths = []
         for b in range(B):
             tour_true = recover_tour_from_adj(A_sym_true[b])
             L_true = tour_length(coords_dense[b], tour_true)
             true_lengths.append(L_true)
 
-        # diffusion 采样 latent
+
         z0_sample = sample_z0_prior_ddim(denoise_net, diff_sched, B, latent_dim)
 
-        # 解码成邻接概率
+
         logits_A_sample = vae.decoder(z0_sample, pe_dense, coords_dense)  # [B,N,N]
         prob_A_sample = torch.sigmoid(
             (logits_A_sample + logits_A_sample.transpose(1, 2)) / 2.0
-        )  # 对称化
+        )  
 
         sample_lengths = []
         for b in range(B):
@@ -665,7 +615,7 @@ if __name__ == "__main__":
         pretrain_epochs=10,
     )
 
-    # 训练结束后，用 diffusion + decoder 采样 tour 并评估长度
+ 
     evaluate_sampling(
         vae,
         denoise_net,
@@ -675,3 +625,4 @@ if __name__ == "__main__":
         latent_dim=latent_dim,
         num_graphs=200,
     )
+
