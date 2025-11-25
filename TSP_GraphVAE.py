@@ -13,26 +13,11 @@ from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader
 from torch_geometric.nn import GCNConv
 
-# ================================================================
-# 1. 数据集：读取 learning-tsp 的 Concorde 标注数据
-#    假设：
-#      - 每行前 2N 个 token 是坐标 x1 y1 ... xN yN
-#      - 每行最后 N 个 token 是 tour 顺序 idx0 ... idxN-1
-#      - 中间若干 token（长度、gap 等）统统忽略
-# ================================================================
 class ConcordeTSPDataset(torch.utils.data.Dataset):
-    """
-    读取类似 learning-tsp/data/tsp/tsp20_train_concorde.txt 的文件，
-    为每个 TSP instance 构造一个 PyG Data：
-      x          : [N,2]  节点坐标
-      edge_index : [2,E]  完全图的有向边
-      edge_attr  : [E,1]  边长度
-      y          : [E]    该有向边是否在最优 tour 里 (0/1)
-    """
+
 
     def __init__(self, txt_path: str, max_instances: int = None):
         assert os.path.isfile(txt_path), f"Dataset file not found: {txt_path}"
-        # 从文件名里解析 N（如 tsp20_train_concorde.txt → N=20）
         fname = os.path.basename(txt_path)
         m = re.search(r"tsp(\d+)", fname)
         if m is None:
@@ -54,25 +39,23 @@ class ConcordeTSPDataset(torch.utils.data.Dataset):
                 parts = line.split()
                 L = len(parts)
 
-                # 至少要能容纳：2N（坐标） + N（tour），中间的随便
                 if L < 2 * N + N:
                     raise ValueError(
                         f"Line {line_id} too short: len={L}, "
                         f"but need at least 2N+N={2*N+N}."
                     )
 
-                # --- 1) 坐标：前 2N 个 ---
                 coords_flat = list(map(float, parts[: 2 * N]))
                 coords = np.asarray(coords_flat, dtype=np.float32).reshape(N, 2)
 
-                # --- 2) tour：最后 N 个 ---
+
                 tour_str = parts[-N:]
                 tour = np.asarray(tour_str, dtype=int)
-                # 自动 0/1-based 兼容
+
                 if tour.max() >= N:
                     tour = tour - 1
 
-                # --- 3) 完全图边 ---
+
                 rows, cols = [], []
                 for i in range(N):
                     for j in range(N):
@@ -83,14 +66,13 @@ class ConcordeTSPDataset(torch.utils.data.Dataset):
                 rows = np.asarray(rows, dtype=np.int64)
                 cols = np.asarray(cols, dtype=np.int64)
 
-                # 边距离
+
                 coord_i = coords[rows]
                 coord_j = coords[cols]
                 dists = np.linalg.norm(coord_i - coord_j, axis=1, keepdims=True).astype(
                     np.float32
                 )
 
-                # tour 边标签：tour 中相邻节点（以及回到起点）在有向图中标记 1
                 tour_edges = set()
                 for k in range(N):
                     u = int(tour[k])
@@ -128,9 +110,6 @@ class ConcordeTSPDataset(torch.utils.data.Dataset):
         return self.data_list[idx]
 
 
-# ================================================================
-# 2. 时间嵌入 & 指标
-# ================================================================
 class SinTimeEmbed(nn.Module):
     def __init__(self, dim: int):
         super().__init__()
@@ -155,11 +134,7 @@ class SinTimeEmbed(nn.Module):
 def calc_metrics_from_hat(
     pred_hat: torch.Tensor, target: torch.Tensor
 ) -> Tuple[float, float, float, float]:
-    """
-    pred_hat: [-1,1] 预测的 x0_hat
-    target  : [0,1]  真实 x0
-    将 pred_hat 映射到 [0,1] 概率，然后 0.5 阈值做二分类，算 P/R/F1/Acc
-    """
+
     prob = (pred_hat.clamp(-1.0, 1.0) + 1.0) / 2.0  # [-1,1] -> [0,1]
     pred_bin = (prob > 0.5).float()
 
@@ -180,9 +155,6 @@ def calc_metrics_from_hat(
     )
 
 
-# ================================================================
-# 3. 连续 DDPM 调度（Gaussian）
-# ================================================================
 class GaussianDDPMSchedule:
     def __init__(self, T: int = 200, beta_start=1e-4, beta_end=0.02, device="cpu"):
         self.T = T
@@ -206,10 +178,6 @@ class GaussianDDPMSchedule:
         x_t_hat = sqrt_ab * x0_hat + sqrt_1m * noise
         return x_t_hat, noise
 
-
-# ================================================================
-# 4. Diffusion Denoiser 网络（简化 DIFUSCO）
-# ================================================================
 class EdgeDenoiseGNN(nn.Module):
     def __init__(
         self,
@@ -235,25 +203,25 @@ class EdgeDenoiseGNN(nn.Module):
             nn.Linear(edge_feat_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, 1),
-            nn.Tanh(),  # 输出在 [-1,1]
+            nn.Tanh(), 
         )
 
     def forward(
         self,
-        x: torch.Tensor,          # [N_total,2] 坐标
+        x: torch.Tensor,          # [N_total,2] 
         edge_index: torch.Tensor, # [2,E_total]
-        edge_attr: torch.Tensor,  # [E_total,1] 距离
-        x_t_hat: torch.Tensor,    # [E_total] 噪声后的变量（-1~1）
-        t_graph: torch.Tensor,    # [B] 每个图的时间步
-        batch: torch.Tensor,      # [N_total] 节点所属图
+        edge_attr: torch.Tensor,  # [E_total,1] 
+        x_t_hat: torch.Tensor,    # [E_total] 
+        t_graph: torch.Tensor,    # [B] 
+        batch: torch.Tensor,      # [N_total] 
     ):
-        # ---- 节点编码 ----
+
         h = self.node_in(x)
         h = F.relu(h)
         for conv in self.convs:
             h = F.relu(conv(h, edge_index))
 
-        # ---- 时间嵌入 ----
+
         t_emb_graph = self.time_embed(t_graph)          # [B,time_dim]
         t_emb_graph = self.time_mlp(t_emb_graph)        # [B,hidden]
 
@@ -261,7 +229,7 @@ class EdgeDenoiseGNN(nn.Module):
         edge_batch = batch[row]                         # 每条边属于哪个图
         t_edge = t_emb_graph[edge_batch]                # [E,hidden]
 
-        # ---- 边特征拼接 ----
+ 
         hi = h[row]
         hj = h[col]
         x_t_hat_col = x_t_hat.unsqueeze(-1)             # [E,1]
@@ -273,9 +241,6 @@ class EdgeDenoiseGNN(nn.Module):
         return x0_hat_pred
 
 
-# ================================================================
-# 5. 训练主循环
-# ================================================================
 def train_model(
     data_path: str = "./data/tsp/tsp20_train_concorde.txt",
     max_instances: int = 2000,
@@ -287,11 +252,11 @@ def train_model(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
 
-    # 数据集
+
     dataset = ConcordeTSPDataset(data_path, max_instances=max_instances)
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
-    # 模型 + 调度
+
     model = EdgeDenoiseGNN(
         node_in_dim=2,
         edge_in_dim=2,
@@ -320,21 +285,21 @@ def train_model(
             batch_vec = batch_data.batch   # [N_tot]
             B = batch_data.num_graphs
 
-            # ---- 真实 x0_hat in {-1,1} ----
+
             x0_hat = y * 2.0 - 1.0         # 0 -> -1, 1 -> 1
 
-            # ---- 随机采样每个图的时间步 t_graph ----
+
             t_graph = torch.randint(0, ddpm.T, (B,), device=device, dtype=torch.long)
 
-            # 对每条边复制对应的时间步
+
             row, _ = edge_index
             edge_batch = batch_vec[row]
             t_edge = t_graph[edge_batch]   # [E_tot]
 
-            # ---- 前向扩散：得到 x_t_hat ----
+
             x_t_hat, _ = ddpm.q_sample(x0_hat, t_edge)
 
-            # ---- 网络预测 x0_hat ----
+
             x0_hat_pred = model(
                 x=x,
                 edge_index=edge_index,
@@ -344,7 +309,7 @@ def train_model(
                 batch=batch_vec,
             )
 
-            # ---- 损失：MSE(x0_hat_pred, x0_hat) ----
+          
             loss = F.mse_loss(x0_hat_pred, x0_hat)
 
             optimizer.zero_grad()
@@ -353,7 +318,7 @@ def train_model(
 
             total_loss += loss.item()
 
-            # ---- 统计指标（边级别）----
+
             with torch.no_grad():
                 p, r, f1, acc = calc_metrics_from_hat(x0_hat_pred, y)
                 p_sum += p
@@ -373,9 +338,10 @@ def train_model(
 if __name__ == "__main__":
     train_model(
         data_path="./data/tsp/tsp20_train_concorde.txt",
-        max_instances=2000,  # 先用 2000 个 sample 做 sanity check
+        max_instances=2000,  
         epochs=30,
         batch_size=64,
         T=200,
         lr=1e-3,
     )
+
