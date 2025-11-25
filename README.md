@@ -13,8 +13,8 @@ The main goals are:
 - Compress graph-structured solutions (molecular graphs, TSP tours) into a **latent representation** with **GraphVAE**.
 - Train **diffusion models** (DDPM/DDIM style) in this latent space to generate new valid structures.
 - Evaluate the pipeline on:
-  - **QM9 / ZINC** molecular datasets (graph reconstruction).
-  - **TSP-20 / TSP-50 / TSP-100** (tour generation, GAP metric).
+  - **QM9, ZINC** molecular datasets (graph reconstruction).
+  - **TSP-20, TSP-50, TSP-100** (tour generation, GAP metric).
 
 ---
 
@@ -55,10 +55,10 @@ For TSP, the final pipeline uses **V3 GraphVAE** + **DDPM**:
 
 ## 3. Method Overview 
 
-### 3.1 Molecule GraphVAE (QM9 / ZINC)
+### 3.1 Molecule GraphVAE (QM9, ZINC)
 
 1. **Data preprocessing**
-   - Load QM9 / ZINC molecules and convert them to graphs (atoms = nodes, bonds = edges).
+   - Load QM9, ZINC molecules and convert them to graphs (atoms = nodes, bonds = edges).
    - Build node features (atom type one-hot) and adjacency matrices.
 
 2. **Positional Encoding Experiments**
@@ -66,7 +66,7 @@ For TSP, the final pipeline uses **V3 GraphVAE** + **DDPM**:
    - Compare:
      - **Random PE assignment** (shuffle node order).
      - **Degree-based PE** (sort nodes by degree before assigning PE).
-   - Metrics: node-level **F1**, **Accuracy**, and edge-level **AUC / AP**.
+   - Metrics: node-level **F1**, **Accuracy**, and edge-level **AUC, AP**.
 
 3. **Findings**
    - Random SinCos PE works better than degree-based PE.
@@ -100,7 +100,7 @@ For TSP, the final pipeline uses **V3 GraphVAE** + **DDPM**:
 ### 3.3 VAE + Diffusion Pipeline for TSP
 
 1. **Step 1 – VAE Encoding**  
-   - Use V3 GraphVAE to encode TSP adjacency matrices into low-dimensional latent vectors.
+   - Use V3 GraphVAE to encode TSP adjacency matrices into low dimensional latent vectors.
 
 2. **Step 2 – Diffusion in Latent Space**  
    - Train a DDPM in the VAE latent space to model the distribution of valid tours.
@@ -110,7 +110,7 @@ For TSP, the final pipeline uses **V3 GraphVAE** + **DDPM**:
    - Decode latent vectors back to adjacency matrices.
    - Extract Hamiltonian paths and compute tour length and GAP.
 
-4. **Results (TSP-20 / 50 / 100)**
+4. **Results (TSP-20, 50, 100)**
    - The pipeline achieves:
      - TSP-20: Length 3.89, GAP 1.09%.
      - TSP-50: GAP 1.89%.
