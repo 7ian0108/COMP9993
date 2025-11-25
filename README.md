@@ -31,7 +31,7 @@ For both molecules and TSP tours, I use a **GraphVAE** with:
   - Node features = original attributes + **SinCos positional encoding** (Random PE vs Degree based PE).
 
 - **Latent space**
-  - Continuous latent vector $ z \in \mathbb{R}^d $.
+  - Continuous latent vector $z \in \mathbb{R}^d$.
   - Trained with standard **VAE loss** (reconstruction + KL divergence with warm-up).
 
 - **Decoder**
