@@ -1,10 +1,3 @@
-# ============================================================
-# Graph DDPM (Continuous) on QM9 — 方案B：普通 MSE 损失版
-# - 不使用 SNR 权重（基线、最稳）
-# - R² & Cosine 评估；特征标准化；时间嵌入
-# - tqdm 进度条，显示每个 epoch 的 Loss / R² / Cos
-# ============================================================
-
 import os, math, warnings
 import torch
 import torch.nn as nn
@@ -19,11 +12,10 @@ import matplotlib.pyplot as plt
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
-# -------------------- 设备 --------------------
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}")
 
-# -------------------- 加载 QM9 --------------------
 dataset = QM9(root='./data/QM9')
 node_dim = dataset.num_features
 N_total = len(dataset)
@@ -35,7 +27,7 @@ test_set  = dataset[N_train+N_val:]
 print(f"QM9 loaded. total={N_total}, train={len(train_set)}, val={len(val_set)}, test={len(test_set)}")
 print("Node feature dim:", node_dim)
 
-# -------------------- 特征标准化 --------------------
+
 with torch.no_grad():
     s = torch.zeros(node_dim)
     ss = torch.zeros(node_dim)
@@ -56,7 +48,7 @@ def denorm_x(x): return x * std.to(x.device) + mean.to(x.device)
 train_loader = DataLoader(train_set, batch_size=64, shuffle=True)
 val_loader   = DataLoader(val_set,   batch_size=64, shuffle=False)
 
-# -------------------- 连续扩散 --------------------
+
 def linear_beta_schedule(timesteps):
     scale = 1000 / timesteps
     beta_start = scale * 1e-4
@@ -64,7 +56,6 @@ def linear_beta_schedule(timesteps):
     return torch.linspace(beta_start, beta_end, timesteps)
 
 class Diffusion:
-    """节点级时间步 t_node: [N]"""
     def __init__(self, timesteps=400, device="cpu"):
         self.timesteps = timesteps
         self.betas  = linear_beta_schedule(timesteps).to(device)
@@ -82,7 +73,6 @@ class Diffusion:
 
 diffusion = Diffusion(timesteps=400, device=device)
 
-# -------------------- 时间嵌入 --------------------
 class SinusoidalTimeEmbedding(nn.Module):
     def __init__(self, dim):
         super().__init__()
@@ -95,7 +85,6 @@ class SinusoidalTimeEmbedding(nn.Module):
         args = t_graph[:,None].float() * freqs[None,:]
         return torch.cat([torch.sin(args), torch.cos(args)], dim=-1)
 
-# -------------------- 模型 --------------------
 class GCN_DDPM(nn.Module):
     def __init__(self, in_dim, hidden=256, tdim=64):
         super().__init__()
@@ -118,7 +107,6 @@ model = GCN_DDPM(in_dim=node_dim).to(device)
 optimizer = torch.optim.Adam(model.parameters(), lr=2e-3)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=50, eta_min=5e-4)
 
-# -------------------- 评估 R² & Cosine --------------------
 def _cos_sim(a, b, eps=1e-8):
     an = a / (np.linalg.norm(a, axis=-1, keepdims=True) + eps)
     bn = b / (np.linalg.norm(b, axis=-1, keepdims=True) + eps)
@@ -153,7 +141,6 @@ def evaluate_regression(loader):
                    Yp.reshape(Yp.shape[0], -1)).mean()
     return {"R2": float(r2), "Cosine": float(cos)}
 
-# -------------------- 单轮训练（普通 MSE） --------------------
 def run_epoch(loader, train=True, epoch=None):
     model.train() if train else model.eval()
     phase = "Train" if train else "Val"
@@ -171,7 +158,7 @@ def run_epoch(loader, train=True, epoch=None):
             noise = torch.randn_like(x0)
             xt = diffusion.q_sample(x0, t_node, noise)
             pred_noise = model(xt, edge_index, t_graph, batch_vec)
-            loss = F.mse_loss(pred_noise, noise)    # 普通 MSE 损失
+            loss = F.mse_loss(pred_noise, noise)    
             if train:
                 optimizer.zero_grad()
                 loss.backward()
@@ -181,7 +168,6 @@ def run_epoch(loader, train=True, epoch=None):
             pbar.set_postfix({"loss": f"{loss.item():.4f}"})
     return total / max(1, len(loader))
 
-# -------------------- 训练主循环 --------------------
 EPOCHS = 800
 logs = {"train_loss": [], "val_loss": [], "val_r2": [], "val_cos": []}
 
@@ -200,7 +186,6 @@ for ep in range(1, EPOCHS+1):
 
 torch.save(model.state_dict(), "graph_ddpm_qm9.pt")
 
-# -------------------- 可视化曲线 --------------------
 plt.figure(figsize=(12,4))
 plt.subplot(1,2,1)
 plt.plot(logs["train_loss"], label="Train Loss")
@@ -215,9 +200,10 @@ plt.xlabel("Epoch"); plt.ylabel("Score"); plt.title("R² & Cosine per Epoch")
 plt.grid(True); plt.legend()
 plt.tight_layout(); plt.show()
 
-# -------------------- 最终评估 --------------------
+
 final = evaluate_regression(val_loader)
 print("\n=== Final (Val) ===")
 for k,v in final.items():
     print(f"{k}: {v:.4f}")
 print("\nSaved model to: graph_ddpm_qm9.pt")
+
