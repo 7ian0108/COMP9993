@@ -10,7 +10,6 @@ from torch_geometric.loader import DataLoader
 from torch_geometric.nn import GCNConv, TopKPooling
 from torch_geometric.utils import to_dense_adj, to_dense_batch
 
-# =============== SinCos 位置编码（单图） ===============
 def sinusoidal_pe(num_nodes: int, dim: int, device: torch.device) -> torch.Tensor:
     pe = torch.zeros(num_nodes, dim, device=device)
     position = torch.arange(0, num_nodes, device=device).unsqueeze(1)
@@ -19,7 +18,6 @@ def sinusoidal_pe(num_nodes: int, dim: int, device: torch.device) -> torch.Tenso
     pe[:, 1::2] = torch.cos(position * div_term)
     return pe
 
-# =============== 指标（1D 上三角向量） ===============
 @torch.no_grad()
 def calc_metrics(pred_prob_1d: torch.Tensor, target_1d: torch.Tensor) -> Tuple[float, float, float, float]:
     pred_bin = (pred_prob_1d > 0.5).float()
@@ -32,13 +30,9 @@ def calc_metrics(pred_prob_1d: torch.Tensor, target_1d: torch.Tensor) -> Tuple[f
     acc       = (pred_bin == target_1d).float().mean()
     return precision.item(), recall.item(), f1.item(), acc.item()
 
-# =============== KL ===============
 def kl_normal(mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
     return -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
 
-# ==========================
-# Encoder
-# ==========================
 class GCNEncoderWithPool(nn.Module):
     def __init__(self, in_dim: int, pe_dim: int, hidden_dim: int, latent_dim: int, pool_ratio: float = 0.5):
         super().__init__()
@@ -56,16 +50,12 @@ class GCNEncoderWithPool(nn.Module):
         eps = torch.randn_like(std)
         z = mu + eps * std
 
-        # TopKPooling 支持 batch
         z_pool, edge_index_pool, _, batch_pool, perm, _ = self.pool(z, edge_index, batch=batch)
         mu_pool = mu[perm]
         logvar_pool = logvar[perm]
-        # 返回池化后的节点（仍是拼接形式），以及对应的 batch id
         return z_pool, mu_pool, logvar_pool, batch_pool
 
-# ==========================
-# Decoder（批处理版，输出 logits）
-# ==========================
+
 class TransformerDecoderCross(nn.Module):
     def __init__(self, latent_dim: int, pe_dim: int = 8, num_heads: int = 4, num_layers: int = 2, feat_dim: int = 11):
         super().__init__()
@@ -82,18 +72,10 @@ class TransformerDecoderCross(nn.Module):
         )
 
     def forward(self, mask_nodes, sincos_pe, h_pool, node_mask, kv_mask):
-        """
-        mask_nodes: [B, Nmax, F]
-        sincos_pe:  [B, Nmax, pe]
-        h_pool:     [B, Kmax, D]
-        node_mask:  [B, Nmax]  True表示有效节点
-        kv_mask:    [B, Kmax]  True表示有效池化节点
-        """
         B, Nmax, _ = mask_nodes.shape
         q = torch.cat([mask_nodes, sincos_pe], dim=-1)            # [B, Nmax, F+pe]
         q_proj = self.input_proj(q)                               # [B, Nmax, D]
 
-        # TransformerDecoder 的 key padding mask: True=要忽略的位置
         tgt_kpm = (~node_mask)                                    # [B, Nmax]
         mem_kpm = (~kv_mask)                                      # [B, Kmax]
 
@@ -101,20 +83,15 @@ class TransformerDecoderCross(nn.Module):
                              tgt_key_padding_mask=tgt_kpm,
                              memory_key_padding_mask=mem_kpm)     # [B, Nmax, D]
 
-        # 构造 pair，批处理 O(B*Nmax^2*D)
         hi = h_dec.unsqueeze(2).expand(B, Nmax, Nmax, h_dec.size(-1))
         hj = h_dec.unsqueeze(1).expand(B, Nmax, Nmax, h_dec.size(-1))
         pair = torch.cat([hi, hj], dim=-1)                        # [B, Nmax, Nmax, 2D]
         logits = self.edge_mlp(pair).squeeze(-1)                  # [B, Nmax, Nmax]
 
-        # 屏蔽每个图的对角线为 -inf
         eye = torch.eye(Nmax, device=logits.device, dtype=torch.bool).unsqueeze(0)  # [1,Nmax,Nmax]
         logits = logits.masked_fill(eye, float('-inf'))
         return logits
 
-# ==========================
-# GraphVAE（批处理）
-# ==========================
 class GraphVAEPooled(nn.Module):
     def __init__(self, feat_dim, pe_dim, hidden_dim, latent_dim, pool_ratio=0.5):
         super().__init__()
@@ -124,41 +101,27 @@ class GraphVAEPooled(nn.Module):
         self.decoder = TransformerDecoderCross(latent_dim, pe_dim=pe_dim, feat_dim=feat_dim)
 
     def forward(self, x_all, edge_index_all, batch_vec, pe_dense, node_mask):
-        """
-        x_all: [sumN, F]
-        pe_dense: [B, Nmax, pe]
-        node_mask: [B, Nmax]
-        """
-        # 编码（稀疏图），返回池化后的拼接节点及其 batch id
         z_pool, mu_pool, logvar_pool, batch_pool = self.encoder(x_all, pe_dense.view(-1, self.pe_dim)[node_mask.view(-1)], edge_index_all, batch_vec)
 
-        # 把池化后的节点按批 padding 到 [B, Kmax, D]
         h_pool, kv_mask = to_dense_batch(z_pool, batch_pool)      # [B, Kmax, D], [B, Kmax]
         mu_pool_d, _ = to_dense_batch(mu_pool, batch_pool)        # [B, Kmax, D]
         logvar_pool_d, _ = to_dense_batch(logvar_pool, batch_pool)
 
-        # 解码：mask_nodes 用 0 特征
         B, Nmax = node_mask.size()
         mask_nodes = x_all.new_zeros((B, Nmax, self.feat_dim))
         logits = self.decoder(mask_nodes, pe_dense, h_pool, node_mask, kv_mask)  # [B,Nmax,Nmax]
         return logits, mu_pool_d, logvar_pool_d, kv_mask
 
-# ==========================
-# 训练（批处理 + AMP）
-# ==========================
 def train_model(epochs=200, batch_size=128, pe_dim=8, hidden_dim=64, latent_dim=64, pool_ratio=0.5, lr=1e-3):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
 
     dataset = QM9(root="data/QM9")
-    # 如果想快速 sanity check，可先切小子集：
-    # dataset = dataset[:5000]
-
     loader = DataLoader(
         dataset,
         batch_size=batch_size,
         shuffle=True,
-        num_workers=4,            # Windows 上可改成 2 视情况
+        num_workers=4,            
         pin_memory=True,
         persistent_workers=True
     )
@@ -169,7 +132,7 @@ def train_model(epochs=200, batch_size=128, pe_dim=8, hidden_dim=64, latent_dim=
 
     warmup_ratio = 0.3
     beta_max = 0.5
-    bce = nn.BCEWithLogitsLoss(reduction='mean')  # pos_weight 动态设置，见下
+    bce = nn.BCEWithLogitsLoss(reduction='mean')  
 
     for epoch in range(1, epochs + 1):
         model.train()
@@ -184,13 +147,12 @@ def train_model(epochs=200, batch_size=128, pe_dim=8, hidden_dim=64, latent_dim=
         for data in pbar:
             data = data.to(device)
             x_all, edge_index_all = data.x, data.edge_index
-            batch_vec = data.batch                                 # [sumN]
+            batch_vec = data.batch                               
 
-            # Dense 节点特征与掩码
+   
             x_dense, node_mask = to_dense_batch(x_all, batch_vec)  # [B,Nmax,F], [B,Nmax]
             B, Nmax, Fdim = x_dense.shape
-
-            # 构造每个图的 PE 并 pad 到 Nmax（小循环仅 B 次，负担很小）
+            
             pe_list = []
             for b in range(B):
                 n_b = int(node_mask[b].sum())
@@ -200,25 +162,23 @@ def train_model(epochs=200, batch_size=128, pe_dim=8, hidden_dim=64, latent_dim=
                 pe_list.append(pe_pad)
             pe_dense = torch.stack(pe_list, dim=0)                 # [B, Nmax, pe_dim]
 
-            # 稠密邻接（含批维）
+ 
             adj_dense = to_dense_adj(edge_index_all, batch=batch_vec)  # [B, Nmax, Nmax]
 
-            # 预先构造上三角 mask（不含对角）并与有效节点掩码结合
             triu_mask = torch.triu(torch.ones(Nmax, Nmax, device=device, dtype=torch.bool), diagonal=1)  # [Nmax,Nmax]
             valid_pair_mask = (node_mask.unsqueeze(2) & node_mask.unsqueeze(1)) & triu_mask.unsqueeze(0) # [B,Nmax,Nmax]
 
             optimizer.zero_grad(set_to_none=True)
             with torch.cuda.amp.autocast(enabled=torch.cuda.is_available()):
-                # 前向：编码+池化（稀疏），解码（批处理）
+              
                 logits, mu_pool_d, logvar_pool_d, kv_mask = model(
                     x_all, edge_index_all, batch_vec, pe_dense, node_mask
-                )                                                   # logits: [B,Nmax,Nmax]
+                )                                                  
 
-                # 抽取有效上三角
+               
                 logits_u = logits[valid_pair_mask]                  # [M]
                 target_u = adj_dense[valid_pair_mask]               # [M]
 
-                # pos_weight（按本批所有有效对计算）
                 pos = target_u.sum()
                 total_u = target_u.numel()
                 neg = total_u - pos
@@ -226,12 +186,12 @@ def train_model(epochs=200, batch_size=128, pe_dim=8, hidden_dim=64, latent_dim=
                     pos_weight_val = 1.0
                 else:
                     pos_weight_val = float(torch.clamp(neg / (pos + 1e-6), 1.0, 20.0).item())
-                # 动态设置 bce 的 pos_weight
+ 
                 bce.pos_weight = torch.tensor([pos_weight_val], device=device)
 
                 recon = bce(logits_u, target_u)
 
-                # KL：只在有效池化节点上计算
+          
                 kv_mask_flat = kv_mask.unsqueeze(-1).expand_as(mu_pool_d)      # [B,Kmax,D]
                 mu_v = mu_pool_d[kv_mask_flat].view(-1, mu_pool_d.size(-1))
                 logvar_v = logvar_pool_d[kv_mask_flat].view(-1, logvar_pool_d.size(-1))
@@ -260,3 +220,4 @@ def train_model(epochs=200, batch_size=128, pe_dim=8, hidden_dim=64, latent_dim=
 
 if __name__ == "__main__":
     train_model()
+
