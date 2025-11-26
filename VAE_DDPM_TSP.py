@@ -14,20 +14,12 @@ from torch_geometric.loader import DataLoader
 from torch_geometric.nn import GCNConv, global_mean_pool
 from torch_geometric.utils import to_dense_adj, to_dense_batch
 
-# ================== 基础设置 ==================
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 os.environ["OMP_NUM_THREADS"] = "1"
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Using device:", device)
 
 
-# ================================================================
-# 1. 数据集：Concorde TSP（learning-tsp）
-#    假定：
-#      - 前 2N 个 token 是坐标
-#      - 最后 N 个 token 是 tour 顺序
-#      - 中间的通通丢弃
-# ================================================================
 class ConcordeTSPDataset(torch.utils.data.Dataset):
     def __init__(self, txt_path: str, max_instances: int = None):
         assert os.path.isfile(txt_path), f"Dataset file not found: {txt_path}"
@@ -55,17 +47,16 @@ class ConcordeTSPDataset(torch.utils.data.Dataset):
                         f"Line {line_id} too short: len={L}, need >= {2*N+N}"
                     )
 
-                # 坐标：前 2N
                 coords_flat = list(map(float, parts[: 2 * N]))
                 coords = np.asarray(coords_flat, dtype=np.float32).reshape(N, 2)
 
-                # tour：最后 N
+    
                 tour_str = parts[-N:]
                 tour = np.asarray(tour_str, dtype=int)
-                if tour.max() >= N:  # 兼容 1-based
+                if tour.max() >= N: 
                     tour = tour - 1
 
-                # 完全有向图
+ 
                 rows, cols = [], []
                 for i in range(N):
                     for j in range(N):
@@ -82,7 +73,6 @@ class ConcordeTSPDataset(torch.utils.data.Dataset):
                     np.float32
                 )
 
-                # tour 边（有向）打 1
                 tour_edges = set()
                 for k in range(N):
                     u = int(tour[k])
@@ -120,9 +110,6 @@ class ConcordeTSPDataset(torch.utils.data.Dataset):
         return self.data_list[idx]
 
 
-# ================================================================
-# 2. 工具：SinCos PE & 时间嵌入 & KL & 指标
-# ================================================================
 def sinusoidal_pe(num_nodes: int, dim: int, device: torch.device) -> torch.Tensor:
     pe = torch.zeros(num_nodes, dim, device=device)
     position = torch.arange(0, num_nodes, device=device).unsqueeze(1)
@@ -154,10 +141,7 @@ class SinTimeEmbed(nn.Module):
 def edge_metrics_from_logits(
     logits: torch.Tensor, target_sym: torch.Tensor
 ) -> Tuple[float, float, float, float]:
-    """
-    logits: [B,N,N]   VAE 解码出的邻接 logits
-    target_sym: [B,N,N] 对称 0/1 邻接（无向 tour）
-    """
+
     B, N, _ = logits.shape
     device = logits.device
     triu_mask = torch.triu(torch.ones(N, N, device=device, dtype=torch.bool), diagonal=1)
@@ -183,9 +167,6 @@ def kl_normal(mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
     return -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
 
 
-# ================================================================
-# 3. GraphVAE：Encoder / Decoder 共用 SinCos PE + 坐标
-# ================================================================
 class GraphVAEEncoder(nn.Module):
     def __init__(self, node_in_dim: int, pe_dim: int, hidden_dim: int, latent_dim: int):
         super().__init__()
@@ -196,15 +177,9 @@ class GraphVAEEncoder(nn.Module):
         self.fc_logvar = nn.Linear(hidden_dim, latent_dim)
 
     def forward(self, x, edge_index, edge_weight, batch, pe_dense):
-        """
-        x          : [sumN,2]  坐标
-        edge_index : [2,E]
-        edge_weight: [E]       距离
-        batch      : [sumN]
-        pe_dense   : [B,N,pe_dim]
-        """
+
         B, N, P = pe_dense.shape
-        pe_flat = pe_dense.view(B * N, P)  # 按 batch 顺序拼接
+        pe_flat = pe_dense.view(B * N, P)  
 
         x_in = torch.cat([x, pe_flat], dim=-1)  # [sumN, 2+pe]
         h = F.relu(self.gcn1(x_in, edge_index, edge_weight=edge_weight))
@@ -281,9 +256,6 @@ class GraphVAE(nn.Module):
         return logits_A, mu, logvar, z
 
 
-# ================================================================
-# 4. latent 空间上的 Gaussian DDPM
-# ================================================================
 class GaussianDDPMScheduleLatent:
     def __init__(self, T=100, beta_start=1e-4, beta_end=0.02, device="cpu"):
         self.T = T
@@ -319,9 +291,6 @@ class LatentDenoiseNet(nn.Module):
         return self.mlp(h)
 
 
-# ================================================================
-# 5. 训练：GraphVAE + latent DDPM
-# ================================================================
 def train_model(
     data_path: str = "./data/tsp/tsp20_train_concorde.txt",
     max_instances: int = 2000,
@@ -335,7 +304,7 @@ def train_model(
     T_latent: int = 100,
     beta_kl: float = 0.1,
     lambda_diff: float = 0.5,
-    pretrain_epochs: int = 10,  # 前若干 epoch 只训练 VAE
+    pretrain_epochs: int = 10,  
 ):
     dataset = ConcordeTSPDataset(data_path, max_instances=max_instances)
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
@@ -375,20 +344,20 @@ def train_model(
             batch_vec = batch_data.batch
             B = batch_data.num_graphs
 
-            # ---------- tour 对称邻接 A_sym: [B,N,N] ----------
+
             adj_dense = to_dense_adj(
                 edge_index, batch=batch_vec, edge_attr=y_edge.unsqueeze(-1)
             ).squeeze(1)  # [B,N,N]
             A_sym = ((adj_dense + adj_dense.transpose(1, 2)) > 0).float()
 
-            # ---------- SinCos PE ----------
+        
             pe_list = [sinusoidal_pe(N, pe_dim, device) for _ in range(B)]
             pe_dense = torch.stack(pe_list, dim=0)  # [B,N,pe]
 
-            # ---------- 坐标 dense ----------
+          
             x_dense, _ = to_dense_batch(x, batch_vec)  # [B,N,2]
 
-            # ---------- GraphVAE ----------
+           
             logits_A, mu, logvar, z0 = vae(batch_data, pe_dense, x_dense)  # logits_A: [B,N,N]
 
             triu_mask = torch.triu(
@@ -397,7 +366,6 @@ def train_model(
             logits_u = logits_A[:, triu_mask].reshape(-1)
             target_u = A_sym[:, triu_mask].reshape(-1)
 
-            # 动态 pos_weight
             pos = target_u.sum()
             total = target_u.numel()
             neg = total - pos
@@ -412,7 +380,6 @@ def train_model(
             kl = kl_normal(mu, logvar)
             vae_loss = recon_loss + beta_kl * kl
 
-            # ---------- latent DDPM ----------
             z0_det = z0.detach()
             t_graph = torch.randint(
                 0, diff_sched.T, (B,), device=device, dtype=torch.long
@@ -471,3 +438,4 @@ if __name__ == "__main__":
         lambda_diff=0.5,
         pretrain_epochs=10,
     )
+
