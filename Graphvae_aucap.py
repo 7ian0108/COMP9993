@@ -10,7 +10,7 @@ from torch_geometric.loader import DataLoader
 from torch_geometric.nn import GCNConv, TopKPooling
 from torch_geometric.utils import to_dense_adj, to_dense_batch
 
-# =============== SinCos 位置编码（单图） ===============
+
 def sinusoidal_pe(num_nodes: int, dim: int, device: torch.device) -> torch.Tensor:
     pe = torch.zeros(num_nodes, dim, device=device)
     position = torch.arange(0, num_nodes, device=device).unsqueeze(1)
@@ -19,22 +19,13 @@ def sinusoidal_pe(num_nodes: int, dim: int, device: torch.device) -> torch.Tenso
     pe[:, 1::2] = torch.cos(position * div_term)
     return pe
 
-# =============== KL ===============
 def kl_normal(mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
     return -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
 
-# =============== AUC & AP（1D 上三角向量） ===============
+
 @torch.no_grad()
 def calc_auc_ap(pred_scores_1d: torch.Tensor, target_1d: torch.Tensor) -> Tuple[float, float]:
-    """
-    计算 ROC-AUC 与 AP（Average Precision）。
-    pred_scores_1d: 预测分数，越大越倾向为正类。可用 sigmoid(logits) 概率，也可直接用 logits。
-    target_1d:      {0,1} 的真值
-    返回: (auc, ap)
-    备注：
-      - AUC 用 Mann–Whitney U 等价实现（基于排序求秩），不做 ties 校正（概率基本无完全相等）。
-      - AP 用“正样本处的 precision 平均值”的等价定义，和 sklearn 的 AP 一致（无插值时）。
-    """
+
     y = target_1d.float().view(-1)
     s = pred_scores_1d.view(-1)
 
@@ -42,41 +33,39 @@ def calc_auc_ap(pred_scores_1d: torch.Tensor, target_1d: torch.Tensor) -> Tuple[
     n_pos = int(y.sum().item())
     n_neg = n - n_pos
 
-    # AUC：极端情况处理
+
     if n_pos == 0 or n_neg == 0:
-        auc = 0.5  # 无法定义时给 0.5（中性）
+        auc = 0.5  
     else:
-        # 使用秩和实现 AUC： (sum_ranks_pos - n_pos*(n_pos+1)/2) / (n_pos*n_neg)
-        order = torch.argsort(s)  # 从小到大
+
+        order = torch.argsort(s) 
         ranks = torch.empty_like(order, dtype=torch.float)
         ranks[order] = torch.arange(1, n + 1, device=s.device, dtype=torch.float)
         R_pos = ranks[y == 1].sum()
         auc = (R_pos - n_pos * (n_pos + 1) / 2.0) / (n_pos * n_neg + 1e-12)
         auc = float(auc.item())
 
-    # AP：极端情况处理
+
     if n_pos == 0:
         ap = 0.0
     elif n_neg == 0:
         ap = 1.0
     else:
-        # 按分数从大到小排序
+
         desc = torch.argsort(s, descending=True)
         y_sorted = y[desc]
-        # 累计 TP，位置从 1 开始计
+  
         tp_cum = torch.cumsum(y_sorted, dim=0)
         idx = torch.arange(1, n + 1, device=s.device, dtype=torch.float)
-        # 只在正样本处取 precision
+        
         pos_mask = (y_sorted == 1)
         precision_at_k = tp_cum[pos_mask] / idx[pos_mask]
-        # AP = 正样本处 precision 的均值
+       
         ap = float(precision_at_k.mean().item()) if precision_at_k.numel() > 0 else 0.0
 
     return auc, ap
 
-# ==========================
-# Encoder
-# ==========================
+
 class GCNEncoderWithPool(nn.Module):
     def __init__(self, in_dim: int, pe_dim: int, hidden_dim: int, latent_dim: int, pool_ratio: float = 0.5):
         super().__init__()
@@ -99,9 +88,7 @@ class GCNEncoderWithPool(nn.Module):
         logvar_pool = logvar[perm]
         return z_pool, mu_pool, logvar_pool, batch_pool
 
-# ==========================
-# Decoder（批处理版，输出 logits）
-# ==========================
+
 class TransformerDecoderCross(nn.Module):
     def __init__(self, latent_dim: int, pe_dim: int = 8, num_heads: int = 4, num_layers: int = 2, feat_dim: int = 11):
         super().__init__()
@@ -122,7 +109,7 @@ class TransformerDecoderCross(nn.Module):
         q = torch.cat([mask_nodes, sincos_pe], dim=-1)            # [B, Nmax, F+pe]
         q_proj = self.input_proj(q)                               # [B, Nmax, D]
 
-        tgt_kpm = (~node_mask)                                    # True=忽略
+        tgt_kpm = (~node_mask)                                 
         mem_kpm = (~kv_mask)
 
         h_dec = self.decoder(tgt=q_proj, memory=h_pool,
@@ -138,9 +125,6 @@ class TransformerDecoderCross(nn.Module):
         logits = logits.masked_fill(eye, float('-inf'))
         return logits
 
-# ==========================
-# GraphVAE（批处理）
-# ==========================
 class GraphVAEPooled(nn.Module):
     def __init__(self, feat_dim, pe_dim, hidden_dim, latent_dim, pool_ratio=0.5):
         super().__init__()
@@ -165,15 +149,12 @@ class GraphVAEPooled(nn.Module):
         logits = self.decoder(mask_nodes, pe_dense, h_pool, node_mask, kv_mask)
         return logits, mu_pool_d, logvar_pool_d, kv_mask
 
-# ==========================
-# 训练（批处理 + AMP）
-# ==========================
+
 def train_model(epochs=200, batch_size=128, pe_dim=8, hidden_dim=64, latent_dim=64, pool_ratio=0.5, lr=1e-3):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
 
     dataset = QM9(root="data/QM9")
-    # dataset = dataset[:5000]  # 如需快速验证
 
     loader = DataLoader(
         dataset,
@@ -211,7 +192,7 @@ def train_model(epochs=200, batch_size=128, pe_dim=8, hidden_dim=64, latent_dim=
             x_dense, node_mask = to_dense_batch(x_all, batch_vec)   # [B,Nmax,F], [B,Nmax]
             B, Nmax, _ = x_dense.shape
 
-            # 构造每图 PE（原版），如需“度数感知分配”，在这里替换
+
             pe_list = []
             for b in range(B):
                 n_b = int(node_mask[b].sum())
@@ -262,9 +243,9 @@ def train_model(epochs=200, batch_size=128, pe_dim=8, hidden_dim=64, latent_dim=
 
             total_loss_epoch += loss.item()
 
-            # === 指标：AUC + AP（建议用 logits 直接喂；也可用 sigmoid 后概率）===
+          
             with torch.no_grad():
-                # 用 logits 计算更加稳定（阈值无关）
+          
                 auc, ap = calc_auc_ap(logits_u, target_u)
                 auc_sum += auc
                 ap_sum  += ap
@@ -276,3 +257,4 @@ def train_model(epochs=200, batch_size=128, pe_dim=8, hidden_dim=64, latent_dim=
 
 if __name__ == "__main__":
     train_model()
+
