@@ -5,13 +5,12 @@ import numpy as np
 from typing import Tuple
 from tqdm import tqdm
 
-# ======== 数据集：ZINC ========
+
 from torch_geometric.datasets import ZINC
 from torch_geometric.loader import DataLoader
 from torch_geometric.nn import GCNConv, TopKPooling
 from torch_geometric.utils import to_dense_adj, to_dense_batch
 
-# =============== SinCos 位置编码（单图） ===============
 def sinusoidal_pe(num_nodes: int, dim: int, device: torch.device) -> torch.Tensor:
     pe = torch.zeros(num_nodes, dim, device=device)
     position = torch.arange(0, num_nodes, device=device).unsqueeze(1)
@@ -20,11 +19,10 @@ def sinusoidal_pe(num_nodes: int, dim: int, device: torch.device) -> torch.Tenso
     pe[:, 1::2] = torch.cos(position * div_term)
     return pe
 
-# =============== KL ===============
+
 def kl_normal(mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
     return -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
 
-# =============== AUC & AP（1D 上三角向量） ===============
 @torch.no_grad()
 def calc_auc_ap(pred_scores_1d: torch.Tensor, target_1d: torch.Tensor) -> Tuple[float, float]:
     y = target_1d.float().view(-1)
@@ -32,7 +30,6 @@ def calc_auc_ap(pred_scores_1d: torch.Tensor, target_1d: torch.Tensor) -> Tuple[
     n = y.numel()
     n_pos = int(y.sum().item()); n_neg = n - n_pos
 
-    # AUC（基于秩和）
     if n_pos == 0 or n_neg == 0:
         auc = 0.5
     else:
@@ -43,7 +40,6 @@ def calc_auc_ap(pred_scores_1d: torch.Tensor, target_1d: torch.Tensor) -> Tuple[
         auc = (R_pos - n_pos * (n_pos + 1) / 2.0) / (n_pos * n_neg + 1e-12)
         auc = float(auc.item())
 
-    # AP（正样本处 precision 的均值）
     if n_pos == 0:
         ap = 0.0
     elif n_neg == 0:
@@ -58,9 +54,6 @@ def calc_auc_ap(pred_scores_1d: torch.Tensor, target_1d: torch.Tensor) -> Tuple[
         ap = float(precision_at_k.mean().item()) if precision_at_k.numel() > 0 else 0.0
     return auc, ap
 
-# ==========================
-# Encoder
-# ==========================
 class GCNEncoderWithPool(nn.Module):
     def __init__(self, in_dim: int, pe_dim: int, hidden_dim: int, latent_dim: int, pool_ratio: float = 0.5):
         super().__init__()
@@ -81,9 +74,6 @@ class GCNEncoderWithPool(nn.Module):
         mu_pool = mu[perm]; logvar_pool = logvar[perm]
         return z_pool, mu_pool, logvar_pool, batch_pool
 
-# ==========================
-# Decoder（批处理版，输出 logits）
-# ==========================
 class TransformerDecoderCross(nn.Module):
     def __init__(self, latent_dim: int, pe_dim: int = 8, num_heads: int = 4, num_layers: int = 2, feat_dim: int = 28):
         super().__init__()
@@ -114,9 +104,6 @@ class TransformerDecoderCross(nn.Module):
         eye = torch.eye(Nmax, device=logits.device, dtype=torch.bool).unsqueeze(0)
         return logits.masked_fill(eye, float('-inf'))
 
-# ==========================
-# GraphVAE（批处理）
-# ==========================
 class GraphVAEPooled(nn.Module):
     def __init__(self, feat_dim, pe_dim, hidden_dim, latent_dim, pool_ratio=0.5):
         super().__init__()
@@ -139,9 +126,6 @@ class GraphVAEPooled(nn.Module):
         logits = self.decoder(mask_nodes, pe_dense, h_pool, node_mask, kv_mask)
         return logits, mu_pool_d, logvar_pool_d, kv_mask
 
-# ==========================
-# 评估函数（val/test 通用）
-# ==========================
 @torch.no_grad()
 def evaluate(model, loader, device, pe_dim):
     model.eval()
@@ -153,7 +137,7 @@ def evaluate(model, loader, device, pe_dim):
         x_dense, node_mask = to_dense_batch(x_all, batch_vec)
         B, Nmax, _ = x_dense.shape
 
-        # 构造每图 PE
+
         pe_list = []
         for b in range(B):
             n_b = int(node_mask[b].sum())
@@ -171,13 +155,12 @@ def evaluate(model, loader, device, pe_dim):
         logits_u = logits[valid_pair_mask]
         target_u = adj_dense[valid_pair_mask]
 
-        # 与训练一致的 pos_weight 处理
         pos = target_u.sum(); total_u = target_u.numel(); neg = total_u - pos
         pos_weight_val = 1.0 if pos.item() < 0.5 else float(torch.clamp(neg/(pos+1e-6), 1.0, 20.0).item())
         bce.pos_weight = torch.tensor([pos_weight_val], device=device)
 
         recon = bce(logits_u, target_u)
-        # KL（仅统计，用于参考；不加入 total_loss 可以改为 recon）
+    
         total_loss += float(recon.item())
 
         auc, ap = calc_auc_ap(logits_u, target_u)
@@ -186,9 +169,7 @@ def evaluate(model, loader, device, pe_dim):
     n_batches = max(1, len(loader))
     return total_loss / n_batches, auc_sum / n_batches, ap_sum / n_batches
 
-# ==========================
-# 训练（含 val/test）
-# ==========================
+
 def train_model(
     epochs=200,
     batch_size=128,
@@ -197,16 +178,16 @@ def train_model(
     latent_dim=64,
     pool_ratio=0.5,
     lr=1e-3,
-    subset=True        # True=官方子集（train/val/test 各 ~10k/1k/1k）；False=全量 ~250k
+    subset=True       
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
 
-    # 三个 split 独立构建
+
     train_set = ZINC(root='data/ZINC', subset=subset, split='train')
     val_set   = ZINC(root='data/ZINC', subset=subset, split='val')
     test_set  = ZINC(root='data/ZINC', subset=subset, split='test')
-    feat_dim = train_set.num_node_features  # 一般 28
+    feat_dim = train_set.num_node_features  
     print(f"ZINC | train={len(train_set)} val={len(val_set)} test={len(test_set)} | feat_dim={feat_dim}")
 
     train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True,  num_workers=4, pin_memory=True, persistent_workers=True)
@@ -235,7 +216,7 @@ def train_model(
             x_dense, node_mask = to_dense_batch(x_all, batch_vec)
             B, Nmax, _ = x_dense.shape
 
-            # 每图 SinCos PE
+     
             pe_list = []
             for b in range(B):
                 n_b = int(node_mask[b].sum())
@@ -279,18 +260,17 @@ def train_model(
                 auc_sum += auc; ap_sum += ap
             pbar.set_postfix(loss=float(loss.item()), auc=float(auc), ap=float(ap))
 
-        # —— 每个 epoch 结束做一次验证 ——
         val_loss, val_auc, val_ap = evaluate(model, val_loader, device, pe_dim)
         print(f"[Epoch {epoch:03d}] beta={beta:.3f} | train_loss={total_loss_epoch/denom_loader:.4f} "
               f"| train_AUC={auc_sum/denom_loader:.4f} train_AP={ap_sum/denom_loader:.4f} "
               f"|| val_loss={val_loss:.4f} val_AUC={val_auc:.4f} val_AP={val_ap:.4f}")
 
-        # 记录最佳（按 val_AP，也可换成 val_AUC）
+
         if val_ap > best_val:
             best_val = val_ap
             best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
 
-    # —— 训练结束：在 test 上评估（用最佳验证权重）——
+
     if best_state is not None:
         model.load_state_dict(best_state)
     test_loss, test_auc, test_ap = evaluate(model, test_loader, device, pe_dim)
@@ -298,4 +278,5 @@ def train_model(
 
 if __name__ == "__main__":
     train_model(subset=False)
+
 
