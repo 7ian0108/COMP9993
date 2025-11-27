@@ -1,0 +1,17 @@
+name: graphvae_rdkit
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.8
+  - numpy
+  - matplotlib
+  - networkx
+  - tqdm
+  - pip
+  - rdkit
+  - pytorch=1.10
+  - torchvision=0.11
+  - cudatoolkit=11.3 
+  - pip:
+      - torch-geometric
